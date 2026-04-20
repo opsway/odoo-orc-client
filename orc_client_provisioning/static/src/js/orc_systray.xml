@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="orc_client_provisioning.OrcSystray">
+        <div t-if="isEnabled" class="o-dropdown dropdown o-orc-systray">
+            <button type="button"
+                    class="btn btn-link o-orc-systray-btn"
+                    t-on-click="onClick"
+                    title="Open ORC">
+                <i class="fa fa-comments" role="img" aria-label="Open ORC"/>
+            </button>
+        </div>
+    </t>
+</templates>

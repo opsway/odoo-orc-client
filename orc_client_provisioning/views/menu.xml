@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_orc_root"
+              name="ORC"
+              web_icon="orc_client_provisioning,static/description/icon.png"
+              groups="orc_client_provisioning.group_orc_manager"/>
+
+    <menuitem id="menu_orc_audit_log"
+              name="Audit log"
+              parent="menu_orc_root"
+              action="action_orc_audit_log"
+              sequence="20"
+              groups="orc_client_provisioning.group_orc_manager"/>
+</odoo>

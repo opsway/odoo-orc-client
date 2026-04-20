@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_orc_audit_log_tree" model="ir.ui.view">
+        <field name="name">orc.audit.log.tree</field>
+        <field name="model">orc.audit.log</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" delete="false">
+                <field name="create_date"/>
+                <field name="user_id"/>
+                <field name="action"/>
+                <field name="status" decoration-success="status=='ok'"
+                       decoration-danger="status=='error'"
+                       decoration-warning="status=='drift'"/>
+                <field name="error" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_orc_audit_log" model="ir.actions.act_window">
+        <field name="name">ORC audit log</field>
+        <field name="res_model">orc.audit.log</field>
+        <field name="view_mode">list</field>
+    </record>
+</odoo>

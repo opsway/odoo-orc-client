@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pot
+.idea/
+.vscode/
+*.egg-info/
