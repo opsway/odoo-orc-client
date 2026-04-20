@@ -33,8 +33,8 @@ the parent repo. See `../docs/` there for endpoint contracts.
 
 - Odoo 18.0 or later
 - Outbound HTTPS from the Odoo instance to the ORC endpoint
-- ORC-side addon-scoped org API token (minted by OpsWay super-admin via
-  `orc_api_tokens.scopes @> ARRAY['addon']`)
+- ORC-side `odoo-client`-scoped org API token (minted by OpsWay super-admin
+  via `orc_api_tokens.scopes @> ARRAY['odoo-client']`)
 
 ## Configuration
 
@@ -44,7 +44,7 @@ All configuration lives in `ir.config_parameter` (read restricted to
 | Parameter | Required | Description |
 |---|---|---|
 | `orc.endpoint_url` | yes | e.g. `https://orc.opsway.com` (no trailing slash) |
-| `orc.org_token` | yes | `orc_...` token with scope=addon |
+| `orc.org_token` | yes | `orc_...` token with scope=odoo-client |
 | `orc.infrastructure_id` | yes | UUID of this Odoo instance in ORC |
 | `orc.rotation_days` | no (default 30) | Odoo API key rotation interval |
 | `orc.sync_interval_minutes` | no (default 5) | Phase 2 poll cadence |

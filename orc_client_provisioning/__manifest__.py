@@ -36,6 +36,7 @@ Configuration is via ``ir.config_parameter`` keys. See the repo README.
         "web.assets_backend": [
             "orc_client_provisioning/static/src/js/orc_systray.js",
             "orc_client_provisioning/static/src/js/orc_systray.xml",
+            "orc_client_provisioning/static/src/scss/orc_systray.scss",
         ],
     },
     "installable": True,

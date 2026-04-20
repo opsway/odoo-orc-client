@@ -6,7 +6,8 @@
                     class="btn btn-link o-orc-systray-btn"
                     t-on-click="onClick"
                     title="Open ORC">
-                <i class="fa fa-comments" role="img" aria-label="Open ORC"/>
+                <img src="/orc_client_provisioning/static/description/icon.svg"
+                     class="o-orc-systray-icon" alt="Open ORC"/>
             </button>
         </div>
     </t>
