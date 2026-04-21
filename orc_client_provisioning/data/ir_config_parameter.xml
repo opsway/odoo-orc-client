@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!--
+        Seed the ir.config_parameter keys the addon reads so they're
+        discoverable in Technical → Parameters → System Parameters right
+        after install. noupdate="1" means the values stick across
+        `-u orc_client_provisioning` upgrades — admins can override and
+        we won't clobber them.
+
+        Secrets (orc.org_token, orc.infrastructure_id) are intentionally
+        omitted: they're per-install and must be set by the admin.
+    -->
+    <record id="orc_endpoint_url" model="ir.config_parameter">
+        <field name="key">orc.endpoint_url</field>
+        <field name="value">https://help.opsway.com</field>
+    </record>
+
+    <record id="orc_rotation_days" model="ir.config_parameter">
+        <field name="key">orc.rotation_days</field>
+        <field name="value">30</field>
+    </record>
+</odoo>

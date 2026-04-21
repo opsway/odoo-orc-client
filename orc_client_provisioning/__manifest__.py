@@ -28,6 +28,7 @@ Configuration is via ``ir.config_parameter`` keys. See the repo README.
         "security/orc_security.xml",
         "security/ir.model.access.csv",
         "data/ir_cron.xml",
+        "data/ir_config_parameter.xml",
         "views/res_users_views.xml",
         "views/orc_audit_log_views.xml",
         "views/menu.xml",
