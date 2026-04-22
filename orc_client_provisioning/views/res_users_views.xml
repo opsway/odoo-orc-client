@@ -9,6 +9,8 @@
                 <page string="ORC Access" name="orc_access" groups="orc_client_provisioning.group_orc_manager">
                     <group>
                         <field name="orc_enabled"/>
+                        <field name="orc_access_level" widget="radio"
+                               help="Read only: API key can call documented read methods only. Read/Write: key has no extra restriction beyond the user's own permissions."/>
                         <field name="orc_user_id" readonly="1" invisible="not orc_enabled"/>
                         <field name="orc_provisioned_at" readonly="1" invisible="not orc_enabled"/>
                         <field name="orc_last_rotation_at" readonly="1" invisible="not orc_enabled"/>

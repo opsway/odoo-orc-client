@@ -46,9 +46,26 @@ class TestOrcProvisioning(TransactionCase):
         self.assertEqual(self.user.orc_api_key_id.name, "ORC (auto-managed)")
         self.assertTrue(self.user.orc_provisioned_at)
         self.assertTrue(self.user.orc_last_rotation_at)
+        # Default orc_access_level is 'read'; it must propagate to the key row.
+        self.assertEqual(self.user.orc_access_level, "read")
+        self.assertEqual(self.user.orc_api_key_id.orc_access_level, "read")
         log = self.env["orc.audit.log"].search([("user_id", "=", self.user.id)], limit=1)
         self.assertEqual(log.action, "provision")
         self.assertEqual(log.status, "ok")
+
+    def test_provision_propagates_write_level_to_key(self):
+        self.user.orc_access_level = "write"
+        captured = {}
+
+        def fake_push(**kw):
+            captured.update(kw)
+
+        with self._patch_client(push_odoo_key=fake_push):
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        self.assertEqual(self.user.orc_api_key_id.orc_access_level, "write")
+        # push_odoo_key receives the level so ORC can mirror it.
+        self.assertEqual(captured.get("access_level"), "write")
 
     def test_provision_rollback_on_push_key_failure(self):
         def fail_push(**kw):

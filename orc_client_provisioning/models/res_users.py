@@ -42,6 +42,17 @@ class ResUsers(models.Model):
         ondelete="set null",
         copy=False,
     )
+    orc_access_level = fields.Selection(
+        [("read", "Read only"), ("write", "Read / Write")],
+        string="ORC API access level",
+        default="read",
+        help=(
+            "Controls what the generated ORC API key is allowed to do "
+            "over XML-RPC / JSON-RPC. 'Read only' (default) lets the "
+            "agent inspect data without mutating anything — the user's "
+            "own web-UI permissions are not affected."
+        ),
+    )
 
     # --- Provisioning lifecycle ------------------------------------------------
 
@@ -71,6 +82,13 @@ class ResUsers(models.Model):
             order="create_date DESC",
             limit=1,
         )
+        # Stamp the access level onto the freshly-generated key row.
+        # The enforcement side reads this on every API-key auth (see
+        # models/res_users_apikeys.py + models/base.py).
+        if key_row:
+            key_row.sudo().write({
+                "orc_access_level": self.orc_access_level or "read",
+            })
         return raw_key, key_row
 
     def _orc_revoke_key(self, key_record):
@@ -103,16 +121,26 @@ class ResUsers(models.Model):
 
             try:
                 # 2. Ensure user exists in ORC. Capture user_id on first create.
+                # ORC role is derived from the local access_level selection so
+                # an Odoo admin provisioning a "read-only API" user ends up
+                # with an ORC `user_readonly` membership without a second UI.
+                desired_role = (
+                    "user_readonly" if user.orc_access_level == "read" else "user"
+                )
                 if not user.orc_user_id:
                     orc_uid = client.provision_user(
                         email=user.login,
                         name=user.name or user.login,
-                        role="user",
+                        role=desired_role,
                     )
                     user.sudo().write({"orc_user_id": orc_uid})
 
                 # 3. Push the new key.
-                client.push_odoo_key(email=user.login, api_key=new_raw_key)
+                client.push_odoo_key(
+                    email=user.login,
+                    api_key=new_raw_key,
+                    access_level=user.orc_access_level or "read",
+                )
             except Exception:
                 # Rollback the just-created key so we don't leak it.
                 user._orc_revoke_key(new_key_row)
@@ -211,19 +239,37 @@ class ResUsers(models.Model):
 
     @api.model
     def _cron_orc_reconcile(self):
-        """Compare ORC's view of enrolled users with Odoo's. Log drift."""
+        """Compare ORC's view of enrolled users with Odoo's.
+
+        Two passes:
+          1. Membership drift (remote-only / local-only) — audit only.
+          2. Role drift — when ORC's role for a user implies a different
+             ``access_level`` than the currently issued key, rotate the
+             key. The rotation path stamps the correct level onto the
+             new key row, which the addon's RPC allowlist + ORM backstop
+             then enforce from that point on.
+
+        Role → access_level mapping:
+          * ``'user_readonly'``            → ``'read'``
+          * ``'user'`` / ``'admin'`` / ... → ``'write'``
+        """
         client = self.env["orc.client"]
         try:
             data = client.list_users()
         except UserError as exc:
             _logger.warning("[orc] reconcile: %s", exc)
             return
-        remote_emails = {u.get("email") for u in data.get("users", []) if u.get("email")}
+        remote_users = {
+            u.get("email"): u
+            for u in data.get("users", [])
+            if u.get("email")
+        }
         local_enabled = self.search([("orc_enabled", "=", True)])
         local_emails = {u.login for u in local_enabled}
 
-        drift_remote_only = remote_emails - local_emails
-        drift_local_only = local_emails - remote_emails
+        # Pass 1: membership drift (unchanged behaviour).
+        drift_remote_only = set(remote_users) - local_emails
+        drift_local_only = local_emails - set(remote_users)
         if drift_remote_only or drift_local_only:
             self.env["orc.audit.log"].sudo().create({
                 "action": "reconcile",
@@ -233,6 +279,37 @@ class ResUsers(models.Model):
                     f"local-only: {sorted(drift_local_only)}"
                 )[:1000],
             })
+
+        # Pass 2: role drift → rotate to realign access_level.
+        for user in local_enabled:
+            remote = remote_users.get(user.login)
+            if not remote:
+                continue
+            remote_role = (remote.get("role") or "").strip()
+            if not remote_role:
+                continue
+            expected_level = "read" if remote_role == "user_readonly" else "write"
+            if user.orc_access_level == expected_level:
+                continue
+            _logger.info(
+                "[orc] role drift for %s: role=%s expected_level=%s "
+                "(local %s) — triggering rotation",
+                user.login, remote_role, expected_level, user.orc_access_level,
+            )
+            user.sudo().write({"orc_access_level": expected_level})
+            try:
+                user.action_orc_provision()
+            except Exception as exc:
+                _logger.warning(
+                    "[orc] role-drift rotation failed for %s: %s",
+                    user.login, exc,
+                )
+                self.env["orc.audit.log"].sudo().create({
+                    "user_id": user.id,
+                    "action": "rotate",
+                    "status": "error",
+                    "error": f"role-drift rotation: {exc}",
+                })
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
@@ -246,3 +323,32 @@ class ResUsers(models.Model):
                     k.unlink()
                 except Exception as exc:
                     _logger.warning("[orc] orphan revoke failed: %s", exc)
+
+    # --- Cron orchestration (18.0.1.2.0) --------------------------------------
+    #
+    # Three crons were consolidated into two to stop them firing in the
+    # same minute and serialising on res.users locks. Semantics are
+    # preserved; the underlying methods above are unchanged.
+
+    @api.model
+    def _cron_orc_sync(self):
+        """Hourly. Fast, safe, idempotent.
+
+        Runs the reconcile pass, which now includes role-drift detection
+        and rotation so an ORC admin flipping a user to/from
+        ``user_readonly`` propagates to the Odoo side within ≤ 1 hour
+        without waiting for the regular rotation-by-expiration schedule.
+        """
+        self._cron_orc_reconcile()
+
+    @api.model
+    def _cron_orc_maintenance(self):
+        """Nightly (02:15 UTC by default). Orphan cleanup then rotation.
+
+        Ordering matters: cleanup first removes stray key rows from
+        previous failed rotations so the rotate step doesn't regenerate
+        them immediately. Role-drift rotations are handled by the
+        hourly sync cron above — this cron only rotates by expiration.
+        """
+        self._cron_orc_orphan_cleanup()
+        self._cron_orc_rotate_keys()

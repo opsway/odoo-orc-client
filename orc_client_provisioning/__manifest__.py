@@ -1,6 +1,6 @@
 {
     "name": "ORC Client — Provisioning",
-    "version": "18.0.1.0.0",
+    "version": "18.0.1.2.0",
     "summary": "Provision Odoo users into OpsWay ORC with auto-rotated API keys and single-click SSO.",
     "description": """
 ORC Client — Provisioning

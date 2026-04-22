@@ -126,7 +126,13 @@ class OrcClientConfig(models.AbstractModel):
         return user_id
 
     @api.model
-    def push_odoo_key(self, *, email: str, api_key: str) -> None:
+    def push_odoo_key(
+        self,
+        *,
+        email: str,
+        api_key: str,
+        access_level: str = "read",
+    ) -> None:
         cfg = self._config()
         self._request(
             "POST",
@@ -135,6 +141,7 @@ class OrcClientConfig(models.AbstractModel):
             json_body={
                 "infrastructure_id": cfg["infra_id"],
                 "api_key": api_key,
+                "access_level": access_level,
             },
         )
 
