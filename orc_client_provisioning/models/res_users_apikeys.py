@@ -30,6 +30,21 @@ class ResUsersApikeys(models.Model):
         ),
     )
 
+    def init(self):
+        # `res.users.apikeys` is `_auto = False` upstream — Odoo's ORM
+        # skips auto ALTER TABLE for fields added by inheriting modules.
+        # We add the column manually; IF NOT EXISTS keeps it idempotent
+        # across fresh installs, upgrades, and re-runs.
+        super_init = getattr(super(), "init", None)
+        if callable(super_init):
+            super_init()
+        self.env.cr.execute(
+            """
+            ALTER TABLE res_users_apikeys
+            ADD COLUMN IF NOT EXISTS orc_access_level VARCHAR DEFAULT 'write'
+            """
+        )
+
     def _check_credentials(self, *, scope, key):
         uid = super()._check_credentials(scope=scope, key=key)
         # Only flag when there is a real request we can stash state on.
