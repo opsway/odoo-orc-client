@@ -30,10 +30,11 @@ now; see docs/orc-client-tasks-roadmap.md in the parent repo).
     "assets": {
         "web.assets_backend": [
             "orc_client_tasks/static/src/scss/orc_chat.scss",
-            "orc_client_tasks/static/src/js/orc_chat_dock.js",
+            "orc_client_tasks/static/src/js/orc_chat_service.js",
             "orc_client_tasks/static/src/js/orc_chat_window.js",
-            "orc_client_tasks/static/src/js/orc_chat_systray.js",
+            "orc_client_tasks/static/src/js/orc_chat_dock.js",
             "orc_client_tasks/static/src/js/orc_task_list_popover.js",
+            "orc_client_tasks/static/src/js/orc_chat_systray.js",
             "orc_client_tasks/static/src/xml/orc_chat_templates.xml",
         ],
     },

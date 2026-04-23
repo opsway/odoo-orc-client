@@ -1,2 +1,106 @@
 /** @odoo-module **/
-// M6 fills this in — OrcChatWindow renders one foldable chat frame.
+
+import { Component, onMounted, useRef, useState } from "@odoo/owl";
+import { useService } from "@web/core/utils/hooks";
+
+/**
+ * Single chat window: header (title + fold + close) + iframe body.
+ *
+ * The iframe is kept around even when folded so a returning user
+ * doesn't pay the full SSO handshake + Next.js boot again. That also
+ * means each open window holds one SSE connection to ORC — acceptable
+ * at N≤3 (the dock's cap); Phase 2b replaces with a shared SSE via
+ * the React SDK extraction.
+ */
+export class OrcChatWindow extends Component {
+    static template = "orc_client_tasks.OrcChatWindow";
+    static props = {
+        roomId: { type: String },
+        folded: { type: Boolean },
+    };
+
+    setup() {
+        this.orcChat = useService("orc_chat");
+        this.iframeRef = useRef("iframe");
+        this.formRef = useRef("form");
+        this.ui = useState({
+            loading: true,
+            error: null,
+            /** "form" name that both the iframe and the hidden form
+             *  reference so the form submit lands inside the iframe,
+             *  not the parent. Unique per window to avoid collisions
+             *  when multiple windows open. */
+            frameName: `orc-chat-${this._stableId(this.props.roomId)}`,
+            /** Nonce handshake — populated after we fetch from
+             *  /orc/tasks/open; the form below then submits them. */
+            ssoUrl: null,
+            ssoNonce: null,
+        });
+
+        onMounted(() => this._startHandshake());
+    }
+
+    _stableId(roomId) {
+        // Slugify the matrix room id into something that's a legal
+        // form target name: alphanumeric + dash.
+        return String(roomId || "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    }
+
+    async _startHandshake() {
+        try {
+            const { url, nonce } = await this.orcChat.openHandshake(this.props.roomId);
+            this.ui.ssoUrl = url;
+            this.ui.ssoNonce = nonce;
+            // Defer to the next frame so OWL re-renders the form with
+            // its action+nonce before we call submit().
+            window.requestAnimationFrame(() => {
+                const form = this.formRef.el;
+                if (form) form.submit();
+            });
+        } catch (err) {
+            this.ui.loading = false;
+            this.ui.error = String(err?.message || err);
+        }
+    }
+
+    onIframeLoad() {
+        // The form submit fires the iframe's load once, plus any
+        // subsequent in-iframe navigations. We only care about
+        // hiding the "loading" overlay — the first non-about:blank
+        // load counts.
+        try {
+            const href = this.iframeRef.el?.contentWindow?.location?.href || "";
+            if (href && !href.startsWith("about:")) {
+                this.ui.loading = false;
+            }
+        } catch {
+            // Cross-origin once the iframe lands on ORC — which means
+            // it loaded successfully. Flip the flag unconditionally.
+            this.ui.loading = false;
+        }
+    }
+
+    onToggleFold() {
+        this.orcChat.toggleFold(this.props.roomId);
+    }
+
+    onClose() {
+        this.orcChat.closeWindow(this.props.roomId);
+    }
+
+    get task() {
+        return this.orcChat.state.tasks.find((t) => t.room_id === this.props.roomId);
+    }
+
+    get title() {
+        const t = this.task;
+        if (t && t.name) return t.name;
+        const raw = String(this.props.roomId || "").replace(/^!/, "");
+        return raw.slice(0, 20) + (raw.length > 20 ? "…" : "");
+    }
+
+    get unread() {
+        const t = this.task;
+        return t ? this.orcChat.isUnread(t) : false;
+    }
+}
