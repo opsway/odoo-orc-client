@@ -217,12 +217,26 @@ class ResUsers(models.Model):
             })
 
     def action_orc_deprovision(self):
+        """Revoke this user's access on THIS Odoo instance only.
+
+        Per the A₁ design: unticking ``orc_enabled`` is per-infra
+        revoke, not full offboarding. We drop the user's ORC-managed
+        Odoo API key (local) and tell ORC to delete the matching
+        ``user_odoo_keys`` row + ``infrastructure.member`` relation.
+
+        We INTENTIONALLY keep ``orc_user_id`` as a breadcrumb so
+        re-ticking ``orc_enabled`` later recovers the same ORC
+        identity rather than re-provisioning from scratch. The
+        user's organization membership, historical task rooms, and
+        enrolments on other Odoos remain untouched — those are not
+        this addon's to manage.
+        """
         for user in self:
             if not user.orc_user_id:
                 continue
             client = self.env["orc.client"]
             try:
-                client.deprovision_user(user_id=user.orc_user_id)
+                client.revoke_infra_access(email=user.login)
             except UserError as exc:
                 self.env["orc.audit.log"].sudo().create({
                     "user_id": user.id,
@@ -235,10 +249,12 @@ class ResUsers(models.Model):
             user._orc_revoke_key(user.orc_api_key_id)
             user.sudo().write({
                 "orc_enabled": False,
-                "orc_user_id": False,
                 "orc_api_key_id": False,
-                "orc_provisioned_at": False,
                 "orc_last_rotation_at": False,
+                # orc_user_id + orc_provisioned_at kept as breadcrumbs;
+                # re-ticking replays provisioning against the same ORC
+                # identity (provision_user is idempotent on the ORC
+                # side so this is safe).
             })
             self.env["orc.audit.log"].sudo().create({
                 "user_id": user.id,
@@ -255,7 +271,13 @@ class ResUsers(models.Model):
         flip_to = vals["orc_enabled"]
         res = super().write(vals)
         for user in self:
-            if flip_to and not user.orc_user_id:
+            # Re-provision fires when `orc_enabled` flips true AND
+            # there's no live ORC-managed API key — covers both the
+            # "never enrolled" case (orc_user_id is None) and the
+            # "previously unchecked, now re-ticked" case (orc_user_id
+            # survives as a breadcrumb but orc_api_key_id was cleared
+            # on deprovision).
+            if flip_to and not user.orc_api_key_id:
                 user.action_orc_provision()
             elif not flip_to and user.orc_user_id:
                 user.action_orc_deprovision()
