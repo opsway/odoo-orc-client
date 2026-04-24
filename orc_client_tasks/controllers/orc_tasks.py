@@ -3,6 +3,7 @@ import logging
 from urllib.parse import quote
 
 import werkzeug.wrappers
+from markupsafe import escape
 
 from odoo import http
 from odoo.exceptions import UserError
@@ -212,3 +213,72 @@ class OrcTasksController(http.Controller):
             "ok": True,
             "room_id": data.get("room_id"),
         })
+
+    # ------------------------------------------------- open-in-orc (full tab)
+
+    @http.route(
+        "/orc/tasks/open-in-orc",
+        type="http",
+        auth="user",
+        methods=["GET"],
+        csrf=False,
+    )
+    def open_in_orc(self, room_id: str | None = None, **_kwargs):
+        """Top-level SSO landing on a specific task inside full ORC.
+
+        Mirrors ``/orc/sso/start`` from the provisioning addon but with
+        ``return_to`` pointing at ``/dashboard/tasks/{room_id}`` (no
+        ``?embed=1``). Used by the chat window's "Open in ORC" link to
+        pop the current room in a new tab with the full dashboard chrome.
+        """
+        user = self._guard_user()
+        if user is None:
+            return werkzeug.wrappers.Response(
+                response="Not provisioned in ORC.",
+                status=403,
+                content_type="text/plain; charset=utf-8",
+            )
+        if not isinstance(room_id, str) or not room_id.startswith("!"):
+            return werkzeug.wrappers.Response(
+                response="room_id required",
+                status=400,
+                content_type="text/plain; charset=utf-8",
+            )
+        return_to = f"/dashboard/tasks/{quote(room_id, safe='')}"
+        try:
+            data = (
+                request.env["orc.client"]
+                .sudo()
+                .mint_sso_nonce(email=user.login, return_to=return_to)
+            )
+        except UserError as exc:
+            _logger.info("ORC mint_sso_nonce (open-in-orc) failed: %s", exc)
+            return werkzeug.wrappers.Response(
+                response=f"ORC handshake failed: {exc}",
+                status=502,
+                content_type="text/plain; charset=utf-8",
+            )
+
+        nonce = data.get("nonce")
+        url = data.get("url")
+        if not nonce or not url:
+            return werkzeug.wrappers.Response(
+                response="ORC returned an incomplete SSO payload.",
+                status=502,
+                content_type="text/plain; charset=utf-8",
+            )
+
+        html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Opening ORC…</title></head>
+<body onload="document.forms[0].submit()">
+  <form method="POST" action="{escape(url)}" target="_top">
+    <input type="hidden" name="nonce" value="{escape(nonce)}">
+    <noscript><button type="submit">Continue to ORC</button></noscript>
+  </form>
+</body></html>"""
+        return werkzeug.wrappers.Response(
+            response=html,
+            status=200,
+            content_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )

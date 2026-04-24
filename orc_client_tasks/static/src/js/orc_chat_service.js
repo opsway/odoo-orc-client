@@ -61,6 +61,18 @@ function parseIso(s) {
     return Number.isFinite(t) ? t : 0;
 }
 
+/** Standalone unread predicate — takes the state fields explicitly so
+ *  callers who read them through their *own* `useState`-subscribed view
+ *  stay reactive. The previous service-closure version read state via
+ *  the service's original reactive reference, which bypassed each
+ *  component's subscription and left badges stale. */
+export function computeIsUnread(task, lastViewed) {
+    const activity = parseIso(task.last_activity);
+    if (!activity) return false;
+    const viewed = parseIso(lastViewed?.[task.room_id]);
+    return activity > viewed;
+}
+
 const orcChatService = {
     dependencies: ["notification"],
 

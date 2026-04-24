@@ -2,6 +2,7 @@
 
 import { Component, useState } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
+import { computeIsUnread } from "./orc_chat_service";
 
 /**
  * List of the user's ORC tasks, grouped by status. Rendered inside
@@ -22,6 +23,10 @@ export class OrcTaskListPopover extends Component {
     setup() {
         this.orcChat = useService("orc_chat");
         this.notification = useService("notification");
+        // See orc_chat_dock.js — useState() on the service reactive is
+        // what actually subscribes this component to re-renders when
+        // the shared state (tasks list, unread markers) mutates.
+        this.state = useState(this.orcChat.state);
         // Local-only component state: the new-task composer.
         this.ui = useState({
             composerOpen: false,
@@ -33,7 +38,7 @@ export class OrcTaskListPopover extends Component {
     get tasks() {
         // Active first, then closed. Inside each group: most-recently-
         // active at the top.
-        const items = [...this.orcChat.state.tasks];
+        const items = [...this.state.tasks];
         items.sort((a, b) => {
             const sa = (a.status === "closed") ? 1 : 0;
             const sb = (b.status === "closed") ? 1 : 0;
@@ -64,7 +69,10 @@ export class OrcTaskListPopover extends Component {
     }
 
     isUnread(task) {
-        return this.orcChat.isUnread(task);
+        // Read lastViewed via this.state (useState-subscribed) so dots
+        // update without a service-call indirection bypassing the
+        // component's reactive observer.
+        return computeIsUnread(task, this.state.lastViewed);
     }
 
     onClickTask(task) {

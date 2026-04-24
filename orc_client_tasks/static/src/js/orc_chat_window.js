@@ -1,7 +1,8 @@
 /** @odoo-module **/
 
-import { Component, onMounted, useRef, useState } from "@odoo/owl";
+import { Component, onMounted, useEffect, useRef, useState } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
+import { computeIsUnread } from "./orc_chat_service";
 
 /**
  * Single chat window: header (title + fold + close) + iframe body.
@@ -21,6 +22,9 @@ export class OrcChatWindow extends Component {
 
     setup() {
         this.orcChat = useService("orc_chat");
+        // Subscribe to the shared service reactive so the title/unread
+        // reflect live task-list updates (see orc_chat_dock.js).
+        this.state = useState(this.orcChat.state);
         this.iframeRef = useRef("iframe");
         this.formRef = useRef("form");
         this.ui = useState({
@@ -37,6 +41,24 @@ export class OrcChatWindow extends Component {
             ssoNonce: null,
         });
 
+        this._submitted = false;
+        // OWL patches the DOM asynchronously after a reactive write.
+        // Submitting the form from an rAF scheduled inside _startHandshake
+        // raced the patch: the form only renders once ui.ssoUrl + ssoNonce
+        // are set, and formRef.el was null when rAF fired, so form.submit()
+        // silently no-oped and the iframe stayed on about:blank forever.
+        // useEffect runs *after* every patch — by the time this fires with
+        // both values set, the form is guaranteed in the DOM.
+        useEffect(
+            (ssoUrl, ssoNonce) => {
+                if (!ssoUrl || !ssoNonce || this._submitted) return;
+                const form = this.formRef.el;
+                if (!form) return;
+                this._submitted = true;
+                form.submit();
+            },
+            () => [this.ui.ssoUrl, this.ui.ssoNonce]
+        );
         onMounted(() => this._startHandshake());
     }
 
@@ -49,14 +71,10 @@ export class OrcChatWindow extends Component {
     async _startHandshake() {
         try {
             const { url, nonce } = await this.orcChat.openHandshake(this.props.roomId);
+            // The useEffect above watches these two and submits the
+            // hidden form after OWL patches it into the DOM.
             this.ui.ssoUrl = url;
             this.ui.ssoNonce = nonce;
-            // Defer to the next frame so OWL re-renders the form with
-            // its action+nonce before we call submit().
-            window.requestAnimationFrame(() => {
-                const form = this.formRef.el;
-                if (form) form.submit();
-            });
         } catch (err) {
             this.ui.loading = false;
             this.ui.error = String(err?.message || err);
@@ -88,8 +106,13 @@ export class OrcChatWindow extends Component {
         this.orcChat.closeWindow(this.props.roomId);
     }
 
+    onOpenInOrc() {
+        const url = `/orc/tasks/open-in-orc?room_id=${encodeURIComponent(this.props.roomId)}`;
+        window.open(url, "_blank", "noopener");
+    }
+
     get task() {
-        return this.orcChat.state.tasks.find((t) => t.room_id === this.props.roomId);
+        return this.state.tasks.find((t) => t.room_id === this.props.roomId);
     }
 
     get title() {
@@ -101,6 +124,6 @@ export class OrcChatWindow extends Component {
 
     get unread() {
         const t = this.task;
-        return t ? this.orcChat.isUnread(t) : false;
+        return t ? computeIsUnread(t, this.state.lastViewed) : false;
     }
 }

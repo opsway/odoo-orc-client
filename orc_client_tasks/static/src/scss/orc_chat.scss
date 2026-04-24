@@ -10,30 +10,27 @@ $orc-chat-window-gap: 10px;
 $orc-chat-dock-bottom: 10px;
 $orc-chat-dock-right: 16px;
 
-/* ------------------------------------------------------------------ systray */
+/* ----------------------------------------------------- systray (green icon) */
 
-.o_orc_chat_systray {
+/* We reuse `.o-orc-systray` from orc_client_provisioning for the button
+ * shell (same hyphen-style class); only the dropdown + unread badge are
+ * additive. Scoping the dropdown styles under the shared class keeps
+ * them active even if the provisioning addon is uninstalled. */
+.o-orc-systray {
     position: relative;
 
-    .o_orc_chat_systray_btn {
-        padding: 0 .6rem;
-        line-height: 1;
-        color: var(--bs-secondary-color, #6b7280);
-        &:hover { color: var(--bs-primary, #2563eb); }
-
-        .o_orc_chat_badge {
-            display: inline-block;
-            min-width: 18px;
-            padding: 1px 5px;
-            margin-left: 4px;
-            font-size: .7rem;
-            font-weight: 600;
-            color: #fff;
-            background: var(--bs-danger, #dc3545);
-            border-radius: 9px;
-            vertical-align: super;
-            line-height: 1.1;
-        }
+    .o_orc_chat_badge {
+        display: inline-block;
+        min-width: 18px;
+        padding: 1px 5px;
+        margin-left: 4px;
+        font-size: .7rem;
+        font-weight: 600;
+        color: #fff;
+        background: var(--bs-danger, #dc3545);
+        border-radius: 9px;
+        vertical-align: super;
+        line-height: 1.1;
     }
 
     .o_orc_chat_dropdown {
@@ -185,8 +182,9 @@ $orc-chat-dock-right: 16px;
             display: flex;
             align-items: center;
             gap: 2px;
-            .btn { color: #fff; padding: 2px 6px; }
+            .btn { color: #fff; padding: 2px 6px; font-size: .78rem; }
             .btn:hover { color: #fff; background: rgba(255, 255, 255, .15); }
+            .o_orc_chat_open_in_orc { opacity: .85; }
         }
     }
 

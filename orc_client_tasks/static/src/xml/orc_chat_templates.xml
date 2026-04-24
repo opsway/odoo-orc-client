@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates id="template" xml:space="preserve">
 
-    <!-- Systray icon + unread badge + dropdown holding the task list.
-         Hidden entirely when the user isn't orc_enabled. -->
-    <t t-name="orc_client_tasks.OrcChatSystray">
-        <div t-if="enabled" class="o_orc_chat_systray">
+    <!-- Override of orc_client_provisioning.OrcSystray: same green icon,
+         new click behavior. A click toggles the task-list popover
+         instead of opening ORC in a new tab. The old "open in a new
+         tab" action is still available from inside the popover. -->
+    <t t-name="orc_client_tasks.OrcSystrayWithTasks">
+        <div t-if="enabled" class="o-dropdown dropdown o-orc-systray">
             <button type="button"
-                    class="btn btn-link o_orc_chat_systray_btn"
+                    class="btn btn-link o-orc-systray-btn"
                     t-on-click="onToggleDropdown"
                     title="ORC chats">
-                <i class="fa fa-comments"/>
+                <img src="/orc_client_provisioning/static/description/icon.svg"
+                     class="o-orc-systray-icon" alt="ORC"/>
                 <span t-if="badgeLabel"
                       class="o_orc_chat_badge"
                       t-esc="badgeLabel"/>
@@ -74,11 +77,19 @@
     </t>
 
     <!-- Dock: fixed-positioned overlay, empty when no windows open.
-         Hidden entirely when orc_enabled is false. -->
+         The root <div> is always rendered (with `t-if` only on the
+         inner content) so OWL/main_components has a stable mount
+         point — a component whose template renders *nothing* on its
+         first pass won't always repaint reliably when state later
+         turns the condition true, leaving task clicks looking like
+         no-ops until a reload. CSS (.o_orc_chat_dock with no children)
+         stays invisible via pointer-events:none + zero layout impact. -->
     <t t-name="orc_client_tasks.OrcChatDock">
-        <div t-if="enabled and visibleWindows.length" class="o_orc_chat_dock">
-            <t t-foreach="visibleWindows" t-as="win" t-key="win.room_id">
-                <OrcChatWindow roomId="win.room_id" folded="win.folded"/>
+        <div class="o_orc_chat_dock">
+            <t t-if="enabled">
+                <t t-foreach="visibleWindows" t-as="win" t-key="win.room_id">
+                    <OrcChatWindow roomId="win.room_id" folded="win.folded"/>
+                </t>
             </t>
         </div>
     </t>
@@ -99,6 +110,12 @@
                     <span t-if="unread" class="o_orc_chat_unread_dot"/>
                 </span>
                 <div class="o_orc_chat_window_actions">
+                    <button type="button"
+                            class="btn btn-sm btn-link o_orc_chat_open_in_orc"
+                            t-on-click.stop="onOpenInOrc"
+                            title="Open this chat in ORC">
+                        <i class="fa fa-external-link"/>
+                    </button>
                     <button type="button"
                             class="btn btn-sm btn-link"
                             t-on-click.stop="onToggleFold"

@@ -34,7 +34,7 @@ now; see docs/orc-client-tasks-roadmap.md in the parent repo).
             "orc_client_tasks/static/src/js/orc_chat_window.js",
             "orc_client_tasks/static/src/js/orc_chat_dock.js",
             "orc_client_tasks/static/src/js/orc_task_list_popover.js",
-            "orc_client_tasks/static/src/js/orc_chat_systray.js",
+            "orc_client_tasks/static/src/js/orc_systray_override.js",
             "orc_client_tasks/static/src/xml/orc_chat_templates.xml",
         ],
     },
