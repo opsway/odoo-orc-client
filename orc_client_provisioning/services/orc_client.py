@@ -136,18 +136,30 @@ class OrcClientConfig(models.AbstractModel):
         *,
         email: str,
         api_key: str,
-        access_level: str = "read",
-    ) -> None:
+        odoo_login: str | None = None,
+    ) -> dict:
+        """Register an Odoo API key for ``email`` against the configured
+        infrastructure.
+
+        ``odoo_login`` is the login string Odoo authenticates as. May
+        differ from ``email`` (e.g. the Odoo ``admin`` user with email
+        ``admin@example.com`` has ``login = "admin"``). When ``None``,
+        the Odoo Resolution Center defaults to ``email`` — preserves
+        pre-refactor behaviour for older deployments that don't pass
+        it yet.
+        """
         cfg = self._config()
-        self._request(
+        body = {
+            "infrastructure_id": cfg["infra_id"],
+            "api_key": api_key,
+        }
+        if odoo_login is not None:
+            body["odoo_login"] = odoo_login
+        return self._request(
             "POST",
             "/api/auth/setup-key",
             acting_user=email,
-            json_body={
-                "infrastructure_id": cfg["infra_id"],
-                "api_key": api_key,
-                "access_level": access_level,
-            },
+            json_body=body,
         )
 
     @api.model

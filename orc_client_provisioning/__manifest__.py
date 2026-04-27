@@ -1,19 +1,19 @@
 {
-    "name": "ORC Client — Provisioning",
-    "version": "18.0.1.5.0",
-    "summary": "Provision Odoo users into OpsWay ORC with auto-rotated API keys and single-click SSO.",
+    "name": "Odoo Resolution Center — Provisioning",
+    "version": "18.0.1.7.0",
+    "summary": "Provision Odoo users into the Odoo Resolution Center with auto-rotated API keys and single-click SSO.",
     "description": """
-ORC Client — Provisioning
-=========================
+Odoo Resolution Center — Provisioning
+=====================================
 
 Phase 1 addon. Lets an Odoo admin pick which users get access to the
-OpsWay ORC platform. For each enrolled user the addon:
+Odoo Resolution Center. For each enrolled user the addon:
 
 - creates a dedicated Odoo API key scoped "ORC (auto-managed)"
-- ships the key to ORC (encrypted at rest via pgcrypto)
+- ships the key to the Odoo Resolution Center (encrypted at rest via pgcrypto)
 - rotates the key on a configurable interval (default 30 days)
-- exposes a systray "Open ORC" button that signs the user in to ORC
-  with no second password prompt (server-to-server nonce exchange,
+- exposes a systray button that signs the user in to the Odoo Resolution
+  Center with no second password prompt (server-to-server nonce exchange,
   one-time, 60-second TTL)
 
 Configuration is via ``ir.config_parameter`` keys. See the repo README.
