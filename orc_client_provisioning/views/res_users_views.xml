@@ -10,9 +10,6 @@
                     <group>
                         <field name="orc_enabled"/>
                         <field name="orc_is_manager" invisible="1"/>
-                        <div invisible="not orc_is_manager" class="text-muted">
-                            This user is an ORC manager — provisioned as ORC admin.
-                        </div>
                         <field name="orc_user_id" readonly="1" invisible="not orc_enabled"/>
                         <field name="orc_provisioned_at" readonly="1" invisible="not orc_enabled"/>
                         <field name="orc_last_rotation_at" readonly="1" invisible="not orc_enabled"/>
