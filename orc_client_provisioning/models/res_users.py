@@ -12,44 +12,43 @@ class ResUsers(models.Model):
     _inherit = "res.users"
 
     orc_enabled = fields.Boolean(
-        string="ORC access",
+        string="Automated Odoo Access with AI tools",
         default=False,
         help=(
-            "When enabled, the user is provisioned into OpsWay ORC, "
-            "gets an auto-managed Odoo API key pushed to ORC, and sees "
-            "the systray icon to open their ORC conversations."
+            "When enabled, the user is provisioned into the Odoo "
+            "Resolution Center, gets an auto-managed Odoo API key "
+            "pushed to it, and sees the systray icon to open their "
+            "Odoo Resolution Center conversations."
         ),
     )
     orc_user_id = fields.Char(
-        string="ORC user id",
+        string="User ID",
         readonly=True,
         copy=False,
     )
     orc_provisioned_at = fields.Datetime(
-        string="ORC provisioned",
+        string="Provisioned",
         readonly=True,
         copy=False,
     )
     orc_last_rotation_at = fields.Datetime(
-        string="ORC key rotated",
+        string="Key rotated",
         readonly=True,
         copy=False,
     )
     orc_api_key_id = fields.Many2one(
         "res.users.apikeys",
-        string="ORC API key",
+        string="Managed API key",
         readonly=True,
         ondelete="set null",
         copy=False,
     )
     orc_is_manager = fields.Boolean(
-        string="Is ORC manager",
+        string="Is Odoo Resolution Center manager",
         compute="_compute_orc_is_manager",
         help=(
-            "True when the user belongs to the ORC manager group "
-            "(implied by base.group_system by default). Drives the "
-            "ORC-side role: managers provision as admin; everyone "
-            "else as user."
+            "True when the user belongs to the Odoo Resolution Center "
+            "manager group (implied by base.group_system by default)."
         ),
     )
 
@@ -149,11 +148,11 @@ class ResUsers(models.Model):
                 client.push_odoo_key(
                     email=user.login,
                     api_key=new_raw_key,
-                    # Tell ORC the Odoo login string explicitly. On
-                    # records where login != email (e.g. the built-in
-                    # ``admin`` user), ORC needs this to stamp Odoo
-                    # writes with the right identity rather than
-                    # defaulting to the caller's email.
+                    # On records where login != email (e.g. the
+                    # built-in ``admin`` user), the Odoo Resolution
+                    # Center needs this to stamp Odoo writes with the
+                    # right identity rather than defaulting to the
+                    # caller's email.
                     odoo_login=user.login,
                 )
             except Exception:

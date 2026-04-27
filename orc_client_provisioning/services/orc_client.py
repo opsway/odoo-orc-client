@@ -144,8 +144,9 @@ class OrcClientConfig(models.AbstractModel):
         ``odoo_login`` is the login string Odoo authenticates as. May
         differ from ``email`` (e.g. the Odoo ``admin`` user with email
         ``admin@example.com`` has ``login = "admin"``). When ``None``,
-        ORC defaults to ``email`` — preserves pre-refactor behaviour
-        for older deployments that don't pass it yet.
+        the Odoo Resolution Center defaults to ``email`` — preserves
+        pre-refactor behaviour for older deployments that don't pass
+        it yet.
         """
         cfg = self._config()
         body = {

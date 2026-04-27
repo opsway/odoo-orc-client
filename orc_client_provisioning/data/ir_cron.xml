@@ -16,7 +16,7 @@
          idempotent. Picks up a role flip (user <-> user_readonly)
          within <= 1 hour; see docs/odoo-client-addon.md. -->
     <record id="ir_cron_orc_sync" model="ir.cron">
-        <field name="name">ORC: sync roles and reconcile</field>
+        <field name="name">Odoo Resolution Center: sync roles and reconcile</field>
         <field name="model_id" ref="base.model_res_users"/>
         <field name="state">code</field>
         <field name="code">model._cron_orc_sync()</field>
@@ -33,7 +33,7 @@
          5-minute-past-hour slot. Odoo's scheduler re-derives nextcall
          after the first run. -->
     <record id="ir_cron_orc_maintenance" model="ir.cron">
-        <field name="name">ORC: daily maintenance</field>
+        <field name="name">Odoo Resolution Center: daily maintenance</field>
         <field name="model_id" ref="base.model_res_users"/>
         <field name="state">code</field>
         <field name="code">model._cron_orc_maintenance()</field>
