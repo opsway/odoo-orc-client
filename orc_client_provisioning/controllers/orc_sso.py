@@ -100,7 +100,10 @@ class OrcSsoController(http.Controller):
         """Trigger point for the systray "Open ORC" button.
 
         Flow:
-          1. Server-to-server: mint a one-time nonce from ORC.
+          1. Server-to-server: mint a one-time nonce from ORC,
+             forwarding the *browser's* UA + IP so ORC can bind the
+             nonce to the browser that will redeem it. (Our own
+             server-to-server UA/IP would never match.)
           2. Return an auto-submitting HTML form that POSTs the nonce
              to ORC's /auth/sso. The nonce never appears in URL query,
              Referer, or browser history.
@@ -117,8 +120,19 @@ class OrcSsoController(http.Controller):
                 "Ask an Odoo admin to tick ORC Enabled on your user record.",
             )
 
+        # Capture the browser context BEFORE the server-to-server mint
+        # call — we need what the BROWSER looks like, not what our
+        # outgoing requests call looks like.
+        httpreq = request.httprequest
+        browser_ua = httpreq.user_agent.string if httpreq.user_agent else None
+        browser_ip = httpreq.remote_addr or None
+
         try:
-            data = request.env["orc.client"].sudo().mint_sso_nonce(email=user.login)
+            data = request.env["orc.client"].sudo().mint_sso_nonce(
+                email=user.login,
+                browser_user_agent=browser_ua,
+                browser_ip=browser_ip,
+            )
         except UserError as exc:
             message = str(exc)
             request.env["orc.audit.log"].sudo().create({

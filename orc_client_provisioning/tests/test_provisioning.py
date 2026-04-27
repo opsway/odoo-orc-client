@@ -28,14 +28,14 @@ class TestOrcProvisioning(TransactionCase):
         defaults = {
             "provision_user": lambda **kw: "orc-uid-1",
             "push_odoo_key": lambda **kw: None,
-            "deprovision_user": lambda **kw: None,
+            "revoke_infra_access": lambda **kw: None,
         }
         defaults.update(overrides)
         return patch.multiple(client, **{k: lambda *a, **kw: v for k, v in defaults.items()
                                           if not callable(v)},
                               provision_user=defaults["provision_user"],
                               push_odoo_key=defaults["push_odoo_key"],
-                              deprovision_user=defaults["deprovision_user"])
+                              revoke_infra_access=defaults["revoke_infra_access"])
 
     def test_provision_creates_key_and_records_audit(self):
         with self._patch_client():
@@ -80,18 +80,64 @@ class TestOrcProvisioning(TransactionCase):
         self.assertFalse(self.user.orc_user_id)
         self.assertFalse(self.user.orc_api_key_id)
 
-    def test_deprovision_revokes_and_clears(self):
+    def test_deprovision_revokes_this_infra_only_and_keeps_breadcrumb(self):
+        """Per A₁: unticking `orc_enabled` is per-infra revoke.
+
+        The local ORC-managed Odoo key row is deleted, the HTTP call
+        to ORC is made with `X-Acting-User` so ORC can drop the
+        matching `user_odoo_keys` row + `infrastructure.member`
+        relation, and the Odoo-side tracking is cleared EXCEPT for
+        `orc_user_id` (breadcrumb so re-ticking re-enrols the same
+        ORC identity).
+        """
+        revoke_calls: list[dict] = []
+
+        def capture_revoke(**kw):
+            revoke_calls.append(kw)
+
         with self._patch_client():
             self.user.orc_enabled = True
         self.assertTrue(self.user.orc_user_id)
+        orc_uid = self.user.orc_user_id
         key_id = self.user.orc_api_key_id.id
 
-        with self._patch_client():
+        with self._patch_client(revoke_infra_access=capture_revoke):
             self.user.orc_enabled = False
 
         self.user.invalidate_recordset()
         self.assertFalse(self.user.orc_enabled)
-        self.assertFalse(self.user.orc_user_id)
+        # Breadcrumb retained.
+        self.assertEqual(self.user.orc_user_id, orc_uid)
+        # Managed key row on Odoo side is gone.
         self.assertFalse(self.user.orc_api_key_id)
-        # Key row is gone.
         self.assertFalse(self.env["res.users.apikeys"].search([("id", "=", key_id)]))
+        # ORC was told to revoke BY EMAIL (not by orc_user_id) — the
+        # per-infra endpoint is acting-user-scoped.
+        self.assertEqual(revoke_calls, [{"email": self.user.login}])
+
+    def test_retick_after_deprovision_reprovisions(self):
+        """A₁ round-trip: uncheck then re-check → fresh provisioning
+        runs against the kept breadcrumb `orc_user_id`.
+        """
+        with self._patch_client():
+            self.user.orc_enabled = True
+        orc_uid = self.user.orc_user_id
+
+        with self._patch_client():
+            self.user.orc_enabled = False
+
+        provision_calls: list[dict] = []
+
+        def capture_provision(**kw):
+            provision_calls.append(kw)
+            return orc_uid  # ORC side is idempotent; returns same id
+
+        with self._patch_client(provision_user=capture_provision):
+            self.user.orc_enabled = True
+
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_api_key_id)  # fresh key pushed
+        # provision_user was actually called despite the breadcrumb
+        # being present (write-hook keys off `orc_api_key_id`, not
+        # `orc_user_id`, to catch re-enrolment).
+        self.assertEqual(len(provision_calls), 1)
