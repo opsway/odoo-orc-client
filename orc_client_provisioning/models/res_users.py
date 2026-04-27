@@ -42,27 +42,14 @@ class ResUsers(models.Model):
         ondelete="set null",
         copy=False,
     )
-    orc_access_level = fields.Selection(
-        [("read", "Read only"), ("write", "Read / Write")],
-        string="ORC API access level",
-        default="read",
-        help=(
-            "Controls what the generated ORC API key is allowed to do "
-            "over XML-RPC / JSON-RPC. 'Read only' (default) lets the "
-            "agent inspect data without mutating anything — the user's "
-            "own web-UI permissions are not affected. "
-            "Ignored for ORC managers — they are always provisioned as "
-            "ORC admins with full access."
-        ),
-    )
     orc_is_manager = fields.Boolean(
         string="Is ORC manager",
         compute="_compute_orc_is_manager",
         help=(
             "True when the user belongs to the ORC manager group "
             "(implied by base.group_system by default). Drives the "
-            "ORC-side role: managers provision as admin; everyone else "
-            "as user / user_readonly based on orc_access_level."
+            "ORC-side role: managers provision as admin; everyone "
+            "else as user."
         ),
     )
 
@@ -78,28 +65,12 @@ class ResUsers(models.Model):
     # --- Provisioning lifecycle ------------------------------------------------
 
     def _orc_desired_role(self) -> str:
-        """Pick the ORC role this user should hold.
-
-        ORC has exactly two primary roles: ``admin`` and ``user``.
-        Read-only is a separate capability, pushed via
-        ``push_odoo_key(access_level=...)``.
-
-        Odoo ORC-manager group → ``admin``. Everyone else → ``user``.
+        """The addon only provisions ``member`` — admin promotion
+        happens in the ORC dashboard, not here. The
+        ``orc_is_manager`` flag still drives view affordances but
+        no longer auto-promotes the user to ORC admin.
         """
-        self.ensure_one()
-        return "admin" if self.orc_is_manager else "user"
-
-    def _orc_desired_access(self) -> str:
-        """Pick the Odoo-RPC access capability this user's key should have.
-
-        Admins always get ``write`` (the read/write radio is hidden
-        for managers in the view). For plain users the local
-        access_level selector is the source of truth.
-        """
-        self.ensure_one()
-        if self.orc_is_manager:
-            return "write"
-        return "read" if self.orc_access_level == "read" else "write"
+        return "member"
 
     def _orc_generate_api_key(self):
         """Generate a new Odoo API key for this user, tagged as ORC-managed."""
@@ -127,15 +98,6 @@ class ResUsers(models.Model):
             order="create_date DESC",
             limit=1,
         )
-        # Stamp the access level onto the freshly-generated key row.
-        # Managers get 'write' regardless of the read/write radio, to
-        # match their ORC admin role. The enforcement side reads this
-        # on every API-key auth (see models/res_users_apikeys.py +
-        # models/base.py).
-        if key_row:
-            key_row.sudo().write({
-                "orc_access_level": self._orc_desired_access(),
-            })
         return raw_key, key_row
 
     def _orc_revoke_key(self, key_record):
@@ -168,12 +130,10 @@ class ResUsers(models.Model):
 
             try:
                 # 2. Ensure user exists in ORC with the right role.
-                # Role is derived from group membership first (managers →
-                # admin) and the access_level radio second (user tier →
-                # user / user_readonly). provision_user is idempotent on
-                # the ORC side and upserts the org_memberships.role, so
-                # calling it on every run keeps ORC in sync whenever a
-                # user is promoted or demoted on the Odoo side.
+                # Role is derived from group membership: ORC-manager
+                # group → admin; everyone else → user. provision_user
+                # is idempotent on the ORC side, so calling it on
+                # every run keeps role in sync.
                 desired_role = user._orc_desired_role()
                 orc_uid = client.provision_user(
                     email=user.login,
@@ -183,14 +143,18 @@ class ResUsers(models.Model):
                 if not user.orc_user_id:
                     user.sudo().write({"orc_user_id": orc_uid})
 
-                # 3. Push the new key. Access level is a separate
-                # capability from the role — managers always get
-                # 'write', user-tier picks from the local radio.
-                effective_level = user._orc_desired_access()
+                # 3. Push the new Odoo API key. ORC stores it
+                # encrypted; the agent will use it to call Odoo
+                # tools as this user.
                 client.push_odoo_key(
                     email=user.login,
                     api_key=new_raw_key,
-                    access_level=effective_level,
+                    # Tell ORC the Odoo login string explicitly. On
+                    # records where login != email (e.g. the built-in
+                    # ``admin`` user), ORC needs this to stamp Odoo
+                    # writes with the right identity rather than
+                    # defaulting to the caller's email.
+                    odoo_login=user.login,
                 )
             except Exception:
                 # Rollback the just-created key so we don't leak it.
@@ -314,20 +278,11 @@ class ResUsers(models.Model):
     def _cron_orc_reconcile(self):
         """Compare ORC's view of enrolled users with Odoo's.
 
-        Two passes:
-          1. Membership drift (remote-only / local-only) — audit only.
-          2. Role drift — when ORC's role diverges from what the Odoo
-             side derives (group-based tier + access_level knob), we
-             re-provision to reassert Odoo's view.
-
-        Authority split:
-          * Admin vs user tier: Odoo group is authoritative. If ORC says
-            admin but the Odoo user left the manager group, we demote;
-            if ORC says user but the Odoo user is a manager, we promote.
-          * Within the user tier (user / user_readonly): **ORC** is
-            authoritative. We align the local access_level to match the
-            remote role, then re-provision so the issued key's access
-            level catches up.
+        Membership drift only (remote-only / local-only) — audit log,
+        no auto-action. The addon no longer manages admin tier (admin
+        upgrades go through the ORC dashboard) and the per-user RPC
+        access axis was dropped in INT-842, so there's nothing else
+        to reconcile.
         """
         client = self.env["orc.client"]
         try:
@@ -343,7 +298,6 @@ class ResUsers(models.Model):
         local_enabled = self.search([("orc_enabled", "=", True)])
         local_emails = {u.login for u in local_enabled}
 
-        # Pass 1: membership drift (unchanged behaviour).
         drift_remote_only = set(remote_users) - local_emails
         drift_local_only = local_emails - set(remote_users)
         if drift_remote_only or drift_local_only:
@@ -355,76 +309,6 @@ class ResUsers(models.Model):
                     f"local-only: {sorted(drift_local_only)}"
                 )[:1000],
             })
-
-        # Pass 2: role/capability drift → re-provision to realign.
-        for user in local_enabled:
-            remote = remote_users.get(user.login)
-            if not remote:
-                continue
-            remote_role = (remote.get("role") or "").strip()
-            if not remote_role:
-                continue
-            # ORC now returns odoo_access separately; legacy ORC
-            # versions that still emit role='user_readonly' are mapped
-            # for backward compatibility.
-            remote_access = (remote.get("odoo_access") or "").strip()
-            if remote_role == "user_readonly":
-                remote_role = "user"
-                remote_access = remote_access or "read"
-
-            # Tier check — Odoo group is authoritative.
-            odoo_is_admin = user.orc_is_manager
-            orc_is_admin = remote_role == "admin"
-            if odoo_is_admin != orc_is_admin:
-                _logger.info(
-                    "[orc] tier drift for %s: odoo_manager=%s orc_role=%s "
-                    "— re-provisioning",
-                    user.login, odoo_is_admin, remote_role,
-                )
-                try:
-                    user.action_orc_provision()
-                except Exception as exc:
-                    _logger.warning(
-                        "[orc] tier-drift re-provision failed for %s: %s",
-                        user.login, exc,
-                    )
-                    self.env["orc.audit.log"].sudo().create({
-                        "user_id": user.id,
-                        "action": "rotate",
-                        "status": "error",
-                        "error": f"tier-drift re-provision: {exc}",
-                    })
-                continue
-
-            # Same tier. For admins there's no read/write knob — no-op.
-            if odoo_is_admin:
-                continue
-
-            # User tier — ORC is authoritative for the capability.
-            if not remote_access:
-                continue
-            expected_level = remote_access if remote_access in ("read", "write") else None
-            if not expected_level or user.orc_access_level == expected_level:
-                continue
-            _logger.info(
-                "[orc] capability drift for %s: odoo_access=%s (local %s) "
-                "— triggering rotation",
-                user.login, expected_level, user.orc_access_level,
-            )
-            user.sudo().write({"orc_access_level": expected_level})
-            try:
-                user.action_orc_provision()
-            except Exception as exc:
-                _logger.warning(
-                    "[orc] capability-drift rotation failed for %s: %s",
-                    user.login, exc,
-                )
-                self.env["orc.audit.log"].sudo().create({
-                    "user_id": user.id,
-                    "action": "rotate",
-                    "status": "error",
-                    "error": f"capability-drift rotation: {exc}",
-                })
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
