@@ -50,6 +50,17 @@ class TestOrcProvisioning(TransactionCase):
         self.assertEqual(log.action, "provision")
         self.assertEqual(log.status, "ok")
 
+    def test_provision_on_write_stamps_last_sync(self):
+        """Flipping orc_enabled=True via write() must stamp the
+        last-sync triple so the form renders ✓ + a recent timestamp
+        immediately, without waiting for the hourly cron."""
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        self.assertEqual(self.user.orc_last_sync_status, "ok")
+        self.assertTrue(self.user.orc_last_sync_at)
+        self.assertIn("provisioned", self.user.orc_last_sync_message or "")
+
     def test_push_odoo_key_payload_does_not_include_access_level(self):
         # INT-842: per-user access axis was dropped. push_odoo_key
         # must no longer ship `access_level` to ORC.
