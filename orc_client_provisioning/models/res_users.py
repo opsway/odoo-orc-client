@@ -51,6 +51,31 @@ class ResUsers(models.Model):
             "manager group (implied by base.group_system by default)."
         ),
     )
+    # Per-user observability for the reconcile cron + write-on-flip
+    # path. Stamped by every cron pass and the write() override —
+    # NULL means "never synced." Surfaced on the user form so admins
+    # can tell at a glance whether the cron picked up a recent flip
+    # of orc_enabled.
+    orc_last_sync_at = fields.Datetime(
+        string="Last synced at",
+        readonly=True,
+        copy=False,
+    )
+    orc_last_sync_status = fields.Selection(
+        selection=[
+            ("ok", "OK"),
+            ("drift", "Drift"),
+            ("error", "Error"),
+        ],
+        string="Last sync status",
+        readonly=True,
+        copy=False,
+    )
+    orc_last_sync_message = fields.Char(
+        string="Last sync message",
+        readonly=True,
+        copy=False,
+    )
 
     @api.depends("groups_id")
     def _compute_orc_is_manager(self):
@@ -105,6 +130,18 @@ class ResUsers(models.Model):
                 key_record.sudo().unlink()
             except Exception as exc:
                 _logger.warning("[orc] failed to revoke key %s: %s", key_record.id, exc)
+
+    def _orc_stamp_sync(self, status, message=""):
+        """Stamp the last-sync triple on this recordset. Always called
+        from a cron's per-user try/except so an exception here never
+        bubbles up. Truncates the message so a long stack trace
+        doesn't blow out the column.
+        """
+        self.sudo().write({
+            "orc_last_sync_at": fields.Datetime.now(),
+            "orc_last_sync_status": status,
+            "orc_last_sync_message": (message or "")[:240],
+        })
 
     def action_orc_provision(self):
         """Provision / re-provision this user in ORC.
@@ -242,8 +279,10 @@ class ResUsers(models.Model):
             # on deprovision).
             if flip_to and not user.orc_api_key_id:
                 user.action_orc_provision()
+                user._orc_stamp_sync("ok", "provisioned on save")
             elif not flip_to and user.orc_user_id:
                 user.action_orc_deprovision()
+                user._orc_stamp_sync("ok", "deprovisioned on save")
         return res
 
     # --- Crons -----------------------------------------------------------------
@@ -264,8 +303,10 @@ class ResUsers(models.Model):
         for user in due:
             try:
                 user.action_orc_provision()
+                user._orc_stamp_sync("ok", "key rotated")
             except Exception as exc:
                 _logger.warning("[orc] rotation failed for %s: %s", user.login, exc)
+                user._orc_stamp_sync("error", f"rotation failed: {exc}")
                 self.env["orc.audit.log"].sudo().create({
                     "user_id": user.id,
                     "action": "rotate",
@@ -275,39 +316,100 @@ class ResUsers(models.Model):
 
     @api.model
     def _cron_orc_reconcile(self):
-        """Compare ORC's view of enrolled users with Odoo's.
+        """Two-way reconcile: local Odoo is the source of truth.
 
-        Membership drift only (remote-only / local-only) — audit log,
-        no auto-action. The addon no longer manages admin tier (admin
-        upgrades go through the ORC dashboard) and the per-user RPC
-        access axis was dropped in INT-842, so there's nothing else
-        to reconcile.
+        Per email in (local_enabled ∪ remote):
+          - local_enabled + remote present  → in sync (stamp ok)
+          - local_enabled + remote missing  → re-provision to ORC
+          - remote present + local disabled → revoke from ORC
+          - remote present + no local user  → orphan; audit-log only
+
+        Each per-user branch wraps the work in its own try/except and
+        always stamps `orc_last_sync_*` so admins can see staleness on
+        the user form. A failure in `client.list_users()` itself stamps
+        every `orc_enabled=True` user as error so the dashboard surfaces
+        a network/auth outage immediately.
         """
         client = self.env["orc.client"]
+        local_enabled = self.search([("orc_enabled", "=", True)])
+
         try:
             data = client.list_users()
         except UserError as exc:
-            _logger.warning("[orc] reconcile: %s", exc)
+            _logger.warning("[orc] reconcile fetch failed: %s", exc)
+            for user in local_enabled:
+                user._orc_stamp_sync("error", f"reconcile fetch failed: {exc}")
+            self.env["orc.audit.log"].sudo().create({
+                "action": "reconcile",
+                "status": "error",
+                "error": str(exc)[:1000],
+            })
             return
+
         remote_users = {
             u.get("email"): u
             for u in data.get("users", [])
             if u.get("email")
         }
-        local_enabled = self.search([("orc_enabled", "=", True)])
-        local_emails = {u.login for u in local_enabled}
+        local_by_email = {u.login: u for u in local_enabled}
 
-        drift_remote_only = set(remote_users) - local_emails
-        drift_local_only = local_emails - set(remote_users)
-        if drift_remote_only or drift_local_only:
-            self.env["orc.audit.log"].sudo().create({
-                "action": "reconcile",
-                "status": "drift",
-                "error": (
-                    f"remote-only: {sorted(drift_remote_only)} "
-                    f"local-only: {sorted(drift_local_only)}"
-                )[:1000],
-            })
+        # Direction A — local enabled, sync forward.
+        for email, user in local_by_email.items():
+            if email in remote_users:
+                user._orc_stamp_sync("ok", "in sync")
+                continue
+            try:
+                user.action_orc_provision()
+                user._orc_stamp_sync("ok", "re-provisioned to ORC")
+            except Exception as exc:
+                _logger.warning(
+                    "[orc] reconcile re-provision failed for %s: %s",
+                    user.login, exc,
+                )
+                user._orc_stamp_sync("error", f"re-provision failed: {exc}")
+                self.env["orc.audit.log"].sudo().create({
+                    "user_id": user.id,
+                    "action": "reconcile",
+                    "status": "error",
+                    "error": str(exc)[:1000],
+                })
+
+        # Direction B — remote present without a corresponding local
+        # `orc_enabled=True` row. Two sub-cases:
+        #   1. Local user exists with orc_enabled=False → deprovision.
+        #   2. No local user at all → orphan, log only (we don't
+        #      auto-create res.users from the remote list).
+        residual_remote = set(remote_users) - set(local_by_email)
+        if residual_remote:
+            local_disabled_matches = self.search([
+                ("login", "in", list(residual_remote)),
+                ("orc_enabled", "=", False),
+            ])
+            disabled_by_email = {u.login: u for u in local_disabled_matches}
+            for email in residual_remote:
+                user = disabled_by_email.get(email)
+                if user is None:
+                    self.env["orc.audit.log"].sudo().create({
+                        "action": "orphan_remote_user",
+                        "status": "drift",
+                        "error": f"no local res.users for {email}"[:1000],
+                    })
+                    continue
+                try:
+                    client.revoke_infra_access(email=email)
+                    user._orc_stamp_sync("ok", "deprovisioned from ORC")
+                except Exception as exc:
+                    _logger.warning(
+                        "[orc] reconcile deprovision failed for %s: %s",
+                        email, exc,
+                    )
+                    user._orc_stamp_sync("error", f"deprovision failed: {exc}")
+                    self.env["orc.audit.log"].sudo().create({
+                        "user_id": user.id,
+                        "action": "reconcile",
+                        "status": "error",
+                        "error": str(exc)[:1000],
+                    })
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
