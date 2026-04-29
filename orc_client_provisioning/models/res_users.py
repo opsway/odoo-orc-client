@@ -264,13 +264,28 @@ class ResUsers(models.Model):
 
     # --- Toggle hook -----------------------------------------------------------
 
+    # Re-entry guard. The (de)provision flows write back to res.users
+    # to record their bookkeeping (orc_api_key_id, orc_last_*); without
+    # a marker the write override below would re-trigger them and
+    # recurse forever. Anything tagged with this context bypasses the
+    # provisioning logic and just persists the row.
+    _ORC_INFLIGHT_CTX = "orc_provisioning_inflight"
+
     def write(self, vals):
-        if "orc_enabled" not in vals:
+        if (
+            "orc_enabled" not in vals
+            or self.env.context.get(self._ORC_INFLIGHT_CTX)
+        ):
             return super().write(vals)
 
         flip_to = vals["orc_enabled"]
-        res = super().write(vals)
-        for user in self:
+        # Mark the cascade so action_orc_provision / action_orc_deprovision's
+        # internal writes can persist orc_api_key_id, orc_last_rotation_at,
+        # and (when deprovisioning) orc_enabled itself without re-entering
+        # this hook.
+        self_inflight = self.with_context(**{self._ORC_INFLIGHT_CTX: True})
+        res = super(ResUsers, self_inflight).write(vals)
+        for user in self_inflight:
             # Re-provision fires when `orc_enabled` flips true AND
             # there's no live ORC-managed API key — covers both the
             # "never enrolled" case (orc_user_id is None) and the
