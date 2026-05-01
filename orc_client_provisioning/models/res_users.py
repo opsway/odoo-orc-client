@@ -339,6 +339,17 @@ class ResUsers(models.Model):
           - remote present + local disabled → revoke from ORC
           - remote present + no local user  → orphan; audit-log only
 
+        "Remote present" means the user holds a key on THIS infra.
+        ``client.list_users()`` is backed by the per-infra endpoint
+        ``/api/addon/infrastructure-users``; a user revoked from this
+        Odoo (``revoke_infra_access``) keeps their org membership but
+        loses the per-infra key, so they correctly drop out of both
+        directions:
+          - Direction A re-provisions them (they're still locally
+            enabled but no longer reachable on this infra).
+          - Direction B stops re-revoking them every cron tick once
+            the prior revoke succeeded.
+
         Each per-user branch wraps the work in its own try/except and
         always stamps `orc_last_sync_*` so admins can see staleness on
         the user form. A failure in `client.list_users()` itself stamps
