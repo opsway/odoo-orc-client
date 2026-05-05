@@ -8,31 +8,25 @@ from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
-# Default network timeout for every ORC call. Short-ish: these are
-# all synchronous admin actions and a hung ORC shouldn't freeze the
-# Odoo request worker.
+# Default network timeout for every ORC call. Short-ish: synchronous
+# admin calls; a hung ORC must not freeze an Odoo request worker.
 DEFAULT_TIMEOUT = 30
 
 
 class OrcClientConfig(models.AbstractModel):
-    """
-    Thin wrapper around ir.config_parameter + requests.
+    """Stateless wrapper around ir.config_parameter + requests.
 
-    Every call returns the parsed JSON body on success or raises
-    UserError with a human-readable reason. Callers that want to
-    swallow the failure must catch UserError themselves.
-
-    ORC auth contract (v3.3+):
-      - Server-to-server: `Authorization: Bearer orc_<token>` only.
-      - User-scoped: add `X-Acting-User: <email>`; ORC then treats the
-        call as "addon acting on behalf of this user" and applies
-        that user's org membership + permissions.
+    Each public method returns the parsed JSON body on success or
+    raises UserError with a human-readable reason. ORC auth contract:
+      - Server-to-server: ``Authorization: Bearer orc_<token>`` only.
+      - User-scoped: add ``X-Acting-User: <email>``; ORC then treats
+        the call as the addon acting on behalf of that user.
     """
     _name = "orc.client"
     _description = "ORC HTTP client (stateless)"
 
     @api.model
-    def _config(self) -> dict:
+    def _config(self):
         icp = self.env["ir.config_parameter"].sudo()
         endpoint = (icp.get_param("orc.endpoint_url") or "").strip().rstrip("/")
         token = (icp.get_param("orc.org_token") or "").strip()
@@ -43,26 +37,21 @@ class OrcClientConfig(models.AbstractModel):
                 "orc.org_token and orc.infrastructure_id in System "
                 "Parameters before enabling users."
             ))
-        return {
-            "endpoint": endpoint,
-            "token": token,
-            "infra_id": infra_id,
-        }
+        return {"endpoint": endpoint, "token": token, "infra_id": infra_id}
 
     @api.model
     def _request(
         self,
-        method: str,
-        path: str,
-        *,
-        acting_user: str | None = None,
-        json_body: dict | None = None,
-        timeout: int = DEFAULT_TIMEOUT,
-    ) -> dict:
+        method,
+        path,
+        acting_user=None,
+        json_body=None,
+        timeout=DEFAULT_TIMEOUT,
+    ):
         cfg = self._config()
-        url = f"{cfg['endpoint']}{path}"
+        url = "%s%s" % (cfg["endpoint"], path)
         headers = {
-            "Authorization": f"Bearer {cfg['token']}",
+            "Authorization": "Bearer %s" % cfg["token"],
             "Content-Type": "application/json",
         }
         if acting_user:
@@ -70,20 +59,15 @@ class OrcClientConfig(models.AbstractModel):
 
         try:
             resp = requests.request(
-                method,
-                url,
-                headers=headers,
-                json=json_body,
-                timeout=timeout,
+                method, url, headers=headers, json=json_body, timeout=timeout,
             )
         except requests.RequestException as exc:
             _logger.warning("ORC %s %s failed: %s", method, path, exc)
             raise UserError(_(
                 "Failed to reach ORC at %(url)s: %(err)s"
-            ) % {"url": url, "err": exc}) from exc
+            ) % {"url": url, "err": exc})
 
         if resp.status_code >= 400:
-            # ORC always returns JSON even on error; fall back to text.
             try:
                 err = resp.json().get("error") or resp.text
             except ValueError:
@@ -99,20 +83,20 @@ class OrcClientConfig(models.AbstractModel):
             return {}
         return resp.json()
 
-    # --- High-level operations -------------------------------------------------
+    # --- High-level operations -----------------------------------------------
 
     @api.model
-    def ping(self) -> bool:
+    def ping(self):
         self._request("GET", "/api/me/orgs")
         return True
 
     @api.model
-    def provision_user(self, *, email: str, name: str, role: str = "user") -> str:
-        """Create the user + membership in ORC. Returns user_id.
+    def provision_user(self, email, name, role="user"):
+        """Create user + membership in ORC. Returns user_id.
 
-        Password is random and never shown — the user will only ever
-        sign in via SSO handoff. Synapse holds the hash but no login
-        path on the Odoo side ever issues it.
+        Password is random and never shown. Users only ever sign in
+        via SSO handoff; Synapse holds the hash but no Odoo path
+        issues it.
         """
         password = secrets.token_urlsafe(32)
         data = self._request(
@@ -126,13 +110,7 @@ class OrcClientConfig(models.AbstractModel):
         return user_id
 
     @api.model
-    def push_odoo_key(
-        self,
-        *,
-        email: str,
-        api_key: str,
-        access_level: str = "read",
-    ) -> None:
+    def push_odoo_key(self, email, api_key, access_level="read"):
         cfg = self._config()
         self._request(
             "POST",
@@ -146,11 +124,11 @@ class OrcClientConfig(models.AbstractModel):
         )
 
     @api.model
-    def deprovision_user(self, *, user_id: str) -> None:
-        self._request("DELETE", f"/api/admin/users/{user_id}")
+    def deprovision_user(self, user_id):
+        self._request("DELETE", "/api/admin/users/%s" % user_id)
 
     @api.model
-    def mint_sso_nonce(self, *, email: str) -> dict:
+    def mint_sso_nonce(self, email):
         return self._request(
             "POST",
             "/api/addon/sso-exchange",
@@ -158,6 +136,6 @@ class OrcClientConfig(models.AbstractModel):
         )
 
     @api.model
-    def list_users(self) -> dict:
-        """Reconciliation — returns {users, infrastructures} for this org."""
+    def list_users(self):
+        """Reconciliation - returns {users, infrastructures} for this org."""
         return self._request("GET", "/api/admin/users")

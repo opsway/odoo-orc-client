@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="assets_backend" name="orc_client_provisioning assets" inherit_id="web.assets_backend">
+        <xpath expr="." position="inside">
+            <link rel="stylesheet" type="text/scss"
+                  href="/orc_client_provisioning/static/src/scss/orc_systray.scss"/>
+            <script type="text/javascript"
+                    src="/orc_client_provisioning/static/src/js/orc_systray.js"/>
+        </xpath>
+    </template>
+</odoo>

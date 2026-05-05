@@ -1,11 +1,38 @@
-import logging
+"""ORC provisioning fields and lifecycle on res.users.
 
-from odoo import _, api, fields, models
-from odoo.exceptions import UserError
+Design departures from the Odoo 18 version:
+
+* The Odoo API key lives directly on ``res.users`` (hash + leading-hex
+  index) - there is no separate ``res.users.apikeys`` model in Odoo 13
+  to inherit, and one key per user matches the addon's actual usage.
+* RPC auth via the key only fires when the inbound request carries the
+  ``X-ORC-Auth`` header. Password auth for everyone else is untouched.
+* Every successful key-auth and every failed key-auth attempt is
+  recorded in the immutable ``orc.api.access.log``.
+"""
+import binascii
+import logging
+import os
+from datetime import timedelta
+
+import passlib.context
+
+from odoo import _, api, fields, http, models
+from odoo.exceptions import AccessDenied, UserError
 
 _logger = logging.getLogger(__name__)
 
 ORC_KEY_NAME = "ORC (auto-managed)"
+API_KEY_SIZE = 20  # raw bytes -> 40 hex chars
+INDEX_SIZE = 8  # leading hex chars used as the lookup index
+
+# 6000 rounds is what upstream apikeys uses; brute-force resistance is
+# already strong because the keys are 160 bits of urandom, not user
+# secrets.
+KEY_CRYPT_CONTEXT = passlib.context.CryptContext(
+    ["pbkdf2_sha512"], pbkdf2_sha512__rounds=6000,
+)
+_hash_key = getattr(KEY_CRYPT_CONTEXT, "hash", None) or KEY_CRYPT_CONTEXT.encrypt
 
 
 class ResUsers(models.Model):
@@ -30,16 +57,28 @@ class ResUsers(models.Model):
         readonly=True,
         copy=False,
     )
-    orc_last_rotation_at = fields.Datetime(
-        string="ORC key rotated",
+    orc_api_key_hash = fields.Char(
+        string="ORC API key (hashed)",
+        readonly=True,
+        copy=False,
+        groups="orc_client_provisioning.group_orc_manager",
+    )
+    orc_api_key_index = fields.Char(
+        string="ORC API key index",
+        size=INDEX_SIZE,
+        index=True,
+        readonly=True,
+        copy=False,
+        groups="orc_client_provisioning.group_orc_manager",
+    )
+    orc_api_key_expires_at = fields.Datetime(
+        string="ORC API key expires",
         readonly=True,
         copy=False,
     )
-    orc_api_key_id = fields.Many2one(
-        "res.users.apikeys",
-        string="ORC API key",
+    orc_api_key_rotated_at = fields.Datetime(
+        string="ORC API key rotated",
         readonly=True,
-        ondelete="set null",
         copy=False,
     )
     orc_access_level = fields.Selection(
@@ -49,9 +88,8 @@ class ResUsers(models.Model):
         help=(
             "Controls what the generated ORC API key is allowed to do "
             "over XML-RPC / JSON-RPC. 'Read only' (default) lets the "
-            "agent inspect data without mutating anything — the user's "
-            "own web-UI permissions are not affected. "
-            "Ignored for ORC managers — they are always provisioned as "
+            "agent inspect data without mutating anything. "
+            "Ignored for ORC managers - they are always provisioned as "
             "ORC admins with full access."
         ),
     )
@@ -59,10 +97,9 @@ class ResUsers(models.Model):
         string="Is ORC manager",
         compute="_compute_orc_is_manager",
         help=(
-            "True when the user belongs to the ORC manager group "
-            "(implied by base.group_system by default). Drives the "
-            "ORC-side role: managers provision as admin; everyone else "
-            "as user / user_readonly based on orc_access_level."
+            "True when the user belongs to the ORC manager group. "
+            "Drives the ORC-side role: managers provision as admin; "
+            "everyone else as user."
         ),
     )
 
@@ -75,26 +112,96 @@ class ResUsers(models.Model):
         for user in self:
             user.orc_is_manager = bool(group and group in user.groups_id)
 
-    # --- Provisioning lifecycle ------------------------------------------------
+    # --- Auth: header-gated ORC API-key path ---------------------------------
 
-    def _orc_desired_role(self) -> str:
+    def _check_credentials(self, password):
+        """Try the ORC API-key path when the request is header-marked.
+
+        Header convention: any inbound XML-RPC / JSON-RPC request that
+        carries ``X-ORC-Auth`` is asserting "I am ORC; please match my
+        password against the API key on this user". On match we set
+        request flags so the dispatch wrapper (in ``_patches.py``) knows
+        to log every method call and enforce the read-only allowlist.
+
+        Without the header, the upstream password check runs unchanged.
+        With the header but a bad key, we log the failure and raise -
+        we never fall back to password auth on header-marked requests.
+        """
+        req = http.request
+        if not req or not req.httprequest.headers.get("X-ORC-Auth"):
+            return super()._check_credentials(password)
+
+        # Header-marked. Verify against the stored ORC key for self.
+        if self._orc_verify_api_key(password):
+            req.orc_api_key_authenticated = True
+            req.orc_api_key_readonly = (self.orc_access_level == "read")
+            self.env["orc.api.access.log"].sudo()._record(
+                status="ok",
+                user_id=self.env.uid,
+                login_attempted=self.env.user.login,
+                method="_check_credentials",
+                endpoint="auth",
+            )
+            return
+        # Bad key on a header-marked request. Log + deny.
+        self.env["orc.api.access.log"].sudo()._record(
+            status="failed",
+            user_id=self.env.uid,
+            login_attempted=getattr(self.env.user, "login", None),
+            method="_check_credentials",
+            endpoint="auth",
+            denial_reason="invalid-key",
+        )
+        raise AccessDenied()
+
+    def _orc_verify_api_key(self, candidate):
+        """Verify ``candidate`` against this user's stored ORC key.
+
+        Returns True iff:
+          * the user has an active ORC key (hash + index set),
+          * the key is not expired,
+          * the leading-hex index matches,
+          * the slow pbkdf2 verify succeeds.
+
+        ``hash`` / ``index`` are manager-restricted (``groups=`` on the
+        fields), so we read via ``sudo()`` - the user authenticating
+        here is themselves, and ``_check_credentials`` cannot bootstrap
+        the manager group on their behalf.
+        """
+        self.ensure_one()
+        if not candidate or not isinstance(candidate, str):
+            return False
+        s = self.sudo()
+        if not s.orc_api_key_hash or not s.orc_api_key_index:
+            return False
+        if s.orc_api_key_expires_at and s.orc_api_key_expires_at < fields.Datetime.now():
+            return False
+        if candidate[:INDEX_SIZE] != s.orc_api_key_index:
+            return False
+        try:
+            return bool(KEY_CRYPT_CONTEXT.verify(candidate, s.orc_api_key_hash))
+        except Exception:
+            _logger.exception("[orc] crypt-verify error for uid=%s", self.id)
+            return False
+
+    # --- Provisioning lifecycle ----------------------------------------------
+
+    def _orc_desired_role(self):
         """Pick the ORC role this user should hold.
 
-        ORC has exactly two primary roles: ``admin`` and ``user``.
-        Read-only is a separate capability, pushed via
-        ``push_odoo_key(access_level=...)``.
-
-        Odoo ORC-manager group → ``admin``. Everyone else → ``user``.
+        ORC has exactly two primary roles: ``admin`` and ``user``. The
+        read-only / read-write distinction is a separate capability
+        pushed via ``push_odoo_key(access_level=...)``.
         """
         self.ensure_one()
         return "admin" if self.orc_is_manager else "user"
 
-    def _orc_desired_access(self) -> str:
-        """Pick the Odoo-RPC access capability this user's key should have.
+    def _orc_desired_access(self):
+        """Effective Odoo-RPC capability for this user's key.
 
-        Admins always get ``write`` (the read/write radio is hidden
-        for managers in the view). For plain users the local
-        access_level selector is the source of truth.
+        Managers always get ``write`` (radio is hidden in the form for
+        them). For non-managers, the local ``orc_access_level`` selector
+        is the source of truth.
         """
         self.ensure_one()
         if self.orc_is_manager:
@@ -102,78 +209,62 @@ class ResUsers(models.Model):
         return "read" if self.orc_access_level == "read" else "write"
 
     def _orc_generate_api_key(self):
-        """Generate a new Odoo API key for this user, tagged as ORC-managed."""
+        """Mint a new ORC key for this user. Returns the raw value once.
+
+        Side effect: persists the hash, index, rotation timestamp and
+        expiry on ``self``. The caller is responsible for the network
+        side (push to ORC) and for revoking the old key on success.
+        """
         self.ensure_one()
         icp = self.env["ir.config_parameter"].sudo()
-        rotation_days = int(icp.get_param("orc.rotation_days") or 30)
-        expiration = fields.Datetime.add(fields.Datetime.now(), days=rotation_days)
         try:
-            raw_key = (
-                self.env["res.users.apikeys"]
-                .with_user(self)
-                .sudo()
-                ._generate(scope=None, name=ORC_KEY_NAME, expiration_date=expiration)
-            )
-        except Exception as exc:
-            _logger.exception("[orc] _generate failed for %s", self.login)
-            raise UserError(_(
-                "Failed to generate Odoo API key for %(login)s: %(err)s"
-            ) % {"login": self.login, "err": exc}) from exc
+            rotation_days = int(icp.get_param("orc.rotation_days") or 30)
+        except (TypeError, ValueError):
+            rotation_days = 30
+        raw = binascii.hexlify(os.urandom(API_KEY_SIZE)).decode()
+        now = fields.Datetime.now()
+        self.sudo().write({
+            "orc_api_key_hash": _hash_key(raw),
+            "orc_api_key_index": raw[:INDEX_SIZE],
+            "orc_api_key_rotated_at": now,
+            "orc_api_key_expires_at": now + timedelta(days=rotation_days),
+        })
+        return raw
 
-        # `_generate()` returns the raw key and persists a row; find
-        # the freshly created row by name+user and pin our reference.
-        key_row = self.env["res.users.apikeys"].sudo().search(
-            [("user_id", "=", self.id), ("name", "=", ORC_KEY_NAME)],
-            order="create_date DESC",
-            limit=1,
-        )
-        # Stamp the access level onto the freshly-generated key row.
-        # Managers get 'write' regardless of the read/write radio, to
-        # match their ORC admin role. The enforcement side reads this
-        # on every API-key auth (see models/res_users_apikeys.py +
-        # models/base.py).
-        if key_row:
-            key_row.sudo().write({
-                "orc_access_level": self._orc_desired_access(),
-            })
-        return raw_key, key_row
-
-    def _orc_revoke_key(self, key_record):
-        if key_record and key_record.exists():
-            try:
-                key_record.sudo().unlink()
-            except Exception as exc:
-                _logger.warning("[orc] failed to revoke key %s: %s", key_record.id, exc)
+    def _orc_clear_api_key(self):
+        self.sudo().write({
+            "orc_api_key_hash": False,
+            "orc_api_key_index": False,
+            "orc_api_key_rotated_at": False,
+            "orc_api_key_expires_at": False,
+        })
 
     def action_orc_provision(self):
         """Provision / re-provision this user in ORC.
 
-        Ordering (zero-downtime on re-run):
-          1. Generate NEW key locally.
-          2. Create user in ORC (idempotent — 200 if already exists).
-          3. Push NEW key to ORC (upsert semantics in user_odoo_keys).
-          4. Revoke OLD key only AFTER (2) + (3) succeeded.
+        Order (zero-downtime, leak-resistant):
+          1. Snapshot the old key fields (in-memory only - they're
+             about to be overwritten).
+          2. Mint NEW key locally.
+          3. Create user in ORC (idempotent).
+          4. Push NEW key to ORC.
+          5. Any failure between (2) and (4) -> raise; the surrounding
+             transaction rolls back, restoring the old key fields.
 
-        Any exception between (1) and (3) rolls back the Odoo TX; the
-        just-created key is garbage-collected by the orphan-cleanup cron.
+        Step 5 means ORC ends up with whichever key Odoo currently
+        believes is canonical. If the push succeeds but the cron
+        framework rolls back later for unrelated reasons, the next
+        rotation overwrites the orphan on the ORC side via upsert.
         """
         for user in self:
             if not user.active:
                 continue
             client = self.env["orc.client"]
+            old_uid = user.orc_user_id
 
-            # 1. New key first (old still valid).
-            new_raw_key, new_key_row = user._orc_generate_api_key()
-            old_key_row = user.orc_api_key_id
+            new_raw_key = user._orc_generate_api_key()
 
             try:
-                # 2. Ensure user exists in ORC with the right role.
-                # Role is derived from group membership first (managers →
-                # admin) and the access_level radio second (user tier →
-                # user / user_readonly). provision_user is idempotent on
-                # the ORC side and upserts the org_memberships.role, so
-                # calling it on every run keeps ORC in sync whenever a
-                # user is promoted or demoted on the Odoo side.
                 desired_role = user._orc_desired_role()
                 orc_uid = client.provision_user(
                     email=user.login,
@@ -183,9 +274,6 @@ class ResUsers(models.Model):
                 if not user.orc_user_id:
                     user.sudo().write({"orc_user_id": orc_uid})
 
-                # 3. Push the new key. Access level is a separate
-                # capability from the role — managers always get
-                # 'write', user-tier picks from the local radio.
                 effective_level = user._orc_desired_access()
                 client.push_odoo_key(
                     email=user.login,
@@ -193,28 +281,19 @@ class ResUsers(models.Model):
                     access_level=effective_level,
                 )
             except Exception:
-                # Rollback the just-created key so we don't leak it.
-                user._orc_revoke_key(new_key_row)
+                # Don't try to clean up - the surrounding transaction
+                # rolls back and the old key fields come back. Just
+                # propagate.
                 raise
 
-            # 4. Revoke old key (if any). Best-effort — its presence
-            #    won't leak access now that ORC has the new one, but we
-            #    remove it to cap blast radius.
-            if old_key_row and old_key_row.id != new_key_row.id:
-                user._orc_revoke_key(old_key_row)
+            if not user.orc_provisioned_at:
+                user.sudo().write({"orc_provisioned_at": fields.Datetime.now()})
 
-            now = fields.Datetime.now()
-            user.sudo().write({
-                "orc_api_key_id": new_key_row.id,
-                "orc_provisioned_at": user.orc_provisioned_at or now,
-                "orc_last_rotation_at": now,
-            })
-
-            self.env["orc.audit.log"].sudo().create({
-                "user_id": user.id,
-                "action": "provision" if not old_key_row else "rotate",
-                "status": "ok",
-            })
+            self.env["orc.audit.log"].sudo()._record(
+                user_id=user.id,
+                action="provision" if not old_uid else "rotate",
+                status="ok",
+            )
 
     def action_orc_deprovision(self):
         for user in self:
@@ -224,29 +303,27 @@ class ResUsers(models.Model):
             try:
                 client.deprovision_user(user_id=user.orc_user_id)
             except UserError as exc:
-                self.env["orc.audit.log"].sudo().create({
-                    "user_id": user.id,
-                    "action": "deprovision",
-                    "status": "error",
-                    "error": str(exc),
-                })
+                self.env["orc.audit.log"].sudo()._record(
+                    user_id=user.id,
+                    action="deprovision",
+                    status="error",
+                    error=str(exc),
+                )
                 raise
 
-            user._orc_revoke_key(user.orc_api_key_id)
+            user._orc_clear_api_key()
             user.sudo().write({
                 "orc_enabled": False,
                 "orc_user_id": False,
-                "orc_api_key_id": False,
                 "orc_provisioned_at": False,
-                "orc_last_rotation_at": False,
             })
-            self.env["orc.audit.log"].sudo().create({
-                "user_id": user.id,
-                "action": "deprovision",
-                "status": "ok",
-            })
+            self.env["orc.audit.log"].sudo()._record(
+                user_id=user.id,
+                action="deprovision",
+                status="ok",
+            )
 
-    # --- Toggle hook -----------------------------------------------------------
+    # --- Toggle hook ---------------------------------------------------------
 
     def write(self, vals):
         if "orc_enabled" not in vals:
@@ -261,51 +338,42 @@ class ResUsers(models.Model):
                 user.action_orc_deprovision()
         return res
 
-    # --- Crons -----------------------------------------------------------------
+    # --- Crons ---------------------------------------------------------------
 
     @api.model
     def _cron_orc_rotate_keys(self):
-        """Rotate keys older than orc.rotation_days. Runs daily."""
-        icp = self.env["ir.config_parameter"].sudo()
-        rotation_days = int(icp.get_param("orc.rotation_days") or 30)
-        cutoff = fields.Datetime.subtract(fields.Datetime.now(), days=rotation_days)
+        """Rotate keys whose expiry has passed.
+
+        With per-user storage there's no orphan to clean up; expiry
+        comparison on ``orc_api_key_expires_at`` is enough.
+        """
+        cutoff = fields.Datetime.now()
         due = self.search([
             ("orc_enabled", "=", True),
             ("orc_user_id", "!=", False),
             "|",
-                ("orc_last_rotation_at", "=", False),
-                ("orc_last_rotation_at", "<", cutoff),
+                ("orc_api_key_expires_at", "=", False),
+                ("orc_api_key_expires_at", "<", cutoff),
         ])
         for user in due:
             try:
                 user.action_orc_provision()
             except Exception as exc:
                 _logger.warning("[orc] rotation failed for %s: %s", user.login, exc)
-                self.env["orc.audit.log"].sudo().create({
-                    "user_id": user.id,
-                    "action": "rotate",
-                    "status": "error",
-                    "error": str(exc),
-                })
+                self.env["orc.audit.log"].sudo()._record(
+                    user_id=user.id,
+                    action="rotate",
+                    status="error",
+                    error=str(exc),
+                )
 
     @api.model
     def _cron_orc_reconcile(self):
-        """Compare ORC's view of enrolled users with Odoo's.
+        """Reassert authority for tier and capability drift.
 
-        Two passes:
-          1. Membership drift (remote-only / local-only) — audit only.
-          2. Role drift — when ORC's role diverges from what the Odoo
-             side derives (group-based tier + access_level knob), we
-             re-provision to reassert Odoo's view.
-
-        Authority split:
-          * Admin vs user tier: Odoo group is authoritative. If ORC says
-            admin but the Odoo user left the manager group, we demote;
-            if ORC says user but the Odoo user is a manager, we promote.
-          * Within the user tier (user / user_readonly): **ORC** is
-            authoritative. We align the local access_level to match the
-            remote role, then re-provision so the issued key's access
-            level catches up.
+        * Admin vs user *tier*: Odoo group is authoritative.
+        * Read vs write *capability* within the user tier: ORC is
+          authoritative; we mirror it locally and re-provision.
         """
         client = self.env["orc.client"]
         try:
@@ -321,20 +389,16 @@ class ResUsers(models.Model):
         local_enabled = self.search([("orc_enabled", "=", True)])
         local_emails = {u.login for u in local_enabled}
 
-        # Pass 1: membership drift (unchanged behaviour).
         drift_remote_only = set(remote_users) - local_emails
         drift_local_only = local_emails - set(remote_users)
         if drift_remote_only or drift_local_only:
-            self.env["orc.audit.log"].sudo().create({
-                "action": "reconcile",
-                "status": "drift",
-                "error": (
-                    f"remote-only: {sorted(drift_remote_only)} "
-                    f"local-only: {sorted(drift_local_only)}"
-                )[:1000],
-            })
+            self.env["orc.audit.log"].sudo()._record(
+                action="reconcile",
+                status="drift",
+                error=("remote-only: %s local-only: %s"
+                       % (sorted(drift_remote_only), sorted(drift_local_only)))[:1000],
+            )
 
-        # Pass 2: role/capability drift → re-provision to realign.
         for user in local_enabled:
             remote = remote_users.get(user.login)
             if not remote:
@@ -342,21 +406,16 @@ class ResUsers(models.Model):
             remote_role = (remote.get("role") or "").strip()
             if not remote_role:
                 continue
-            # ORC now returns odoo_access separately; legacy ORC
-            # versions that still emit role='user_readonly' are mapped
-            # for backward compatibility.
             remote_access = (remote.get("odoo_access") or "").strip()
             if remote_role == "user_readonly":
                 remote_role = "user"
                 remote_access = remote_access or "read"
 
-            # Tier check — Odoo group is authoritative.
             odoo_is_admin = user.orc_is_manager
             orc_is_admin = remote_role == "admin"
             if odoo_is_admin != orc_is_admin:
                 _logger.info(
-                    "[orc] tier drift for %s: odoo_manager=%s orc_role=%s "
-                    "— re-provisioning",
+                    "[orc] tier drift for %s: odoo_manager=%s orc_role=%s - re-provisioning",
                     user.login, odoo_is_admin, remote_role,
                 )
                 try:
@@ -366,27 +425,24 @@ class ResUsers(models.Model):
                         "[orc] tier-drift re-provision failed for %s: %s",
                         user.login, exc,
                     )
-                    self.env["orc.audit.log"].sudo().create({
-                        "user_id": user.id,
-                        "action": "rotate",
-                        "status": "error",
-                        "error": f"tier-drift re-provision: {exc}",
-                    })
+                    self.env["orc.audit.log"].sudo()._record(
+                        user_id=user.id,
+                        action="rotate",
+                        status="error",
+                        error="tier-drift re-provision: %s" % exc,
+                    )
                 continue
 
-            # Same tier. For admins there's no read/write knob — no-op.
             if odoo_is_admin:
                 continue
 
-            # User tier — ORC is authoritative for the capability.
             if not remote_access:
                 continue
             expected_level = remote_access if remote_access in ("read", "write") else None
             if not expected_level or user.orc_access_level == expected_level:
                 continue
             _logger.info(
-                "[orc] capability drift for %s: odoo_access=%s (local %s) "
-                "— triggering rotation",
+                "[orc] capability drift for %s: odoo_access=%s (local %s) - rotating",
                 user.login, expected_level, user.orc_access_level,
             )
             user.sudo().write({"orc_access_level": expected_level})
@@ -397,51 +453,32 @@ class ResUsers(models.Model):
                     "[orc] capability-drift rotation failed for %s: %s",
                     user.login, exc,
                 )
-                self.env["orc.audit.log"].sudo().create({
-                    "user_id": user.id,
-                    "action": "rotate",
-                    "status": "error",
-                    "error": f"capability-drift rotation: {exc}",
-                })
-
-    @api.model
-    def _cron_orc_orphan_cleanup(self):
-        """Revoke ORC-tagged api keys not referenced by any res.users."""
-        keys = self.env["res.users.apikeys"].sudo().search([("name", "=", ORC_KEY_NAME)])
-        referenced_ids = set(self.search([("orc_api_key_id", "!=", False)]).mapped("orc_api_key_id.id"))
-        for k in keys:
-            if k.id not in referenced_ids:
-                _logger.info("[orc] revoking orphan key %s (user=%s)", k.id, k.user_id.login)
-                try:
-                    k.unlink()
-                except Exception as exc:
-                    _logger.warning("[orc] orphan revoke failed: %s", exc)
-
-    # --- Cron orchestration (18.0.1.2.0) --------------------------------------
-    #
-    # Three crons were consolidated into two to stop them firing in the
-    # same minute and serialising on res.users locks. Semantics are
-    # preserved; the underlying methods above are unchanged.
+                self.env["orc.audit.log"].sudo()._record(
+                    user_id=user.id,
+                    action="rotate",
+                    status="error",
+                    error="capability-drift rotation: %s" % exc,
+                )
 
     @api.model
     def _cron_orc_sync(self):
-        """Hourly. Fast, safe, idempotent.
-
-        Runs the reconcile pass, which now includes role-drift detection
-        and rotation so an ORC admin flipping a user to/from
-        ``user_readonly`` propagates to the Odoo side within ≤ 1 hour
-        without waiting for the regular rotation-by-expiration schedule.
-        """
+        """Hourly. Reconcile + role-drift rotation."""
         self._cron_orc_reconcile()
 
     @api.model
     def _cron_orc_maintenance(self):
-        """Nightly (02:15 UTC by default). Orphan cleanup then rotation.
-
-        Ordering matters: cleanup first removes stray key rows from
-        previous failed rotations so the rotate step doesn't regenerate
-        them immediately. Role-drift rotations are handled by the
-        hourly sync cron above — this cron only rotates by expiration.
-        """
-        self._cron_orc_orphan_cleanup()
+        """Daily. Expiry-driven rotation."""
         self._cron_orc_rotate_keys()
+
+    # --- UI helper -----------------------------------------------------------
+
+    def action_orc_view_access_log(self):
+        """Open the access log filtered to this user."""
+        self.ensure_one()
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("ORC API access log"),
+            "res_model": "orc.api.access.log",
+            "view_mode": "tree,form",
+            "domain": [("user_id", "=", self.id)],
+        }

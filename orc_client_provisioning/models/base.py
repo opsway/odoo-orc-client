@@ -1,3 +1,17 @@
+"""Read-only enforcement primitives + ORM backstops.
+
+Three things live here:
+
+1. ``READ_ONLY_ALLOWLIST`` - the set of RPC methods we permit when the
+   inbound request was authenticated with a read-only ORC key.
+2. ``_request_is_orc_authenticated`` / ``_request_is_readonly`` - tiny
+   helpers that read flags stashed on ``odoo.http.request`` by the
+   ``res.users._check_credentials`` override.
+3. ``Base`` - an ``_inherit = 'base'`` AbstractModel with create/write/
+   unlink overrides that act as belt-and-braces against any code path
+   that reaches the ORM without going through ``odoo.api.call_kw`` (the
+   primary chokepoint, gated by ``_patches.py``).
+"""
 import logging
 
 from odoo import api, http, models
@@ -7,19 +21,15 @@ _logger = logging.getLogger(__name__)
 
 
 # Pure-read RPC methods we allow when the caller's API key is marked
-# read-only. Anything else is rejected before the method body runs —
-# that's the whole point: keep webhooks, mail, external HTTP calls and
-# raw cr.execute side effects from firing even if they'd rollback.
-#
-# Kept conservative. Extend carefully, and prefer documenting why a new
-# method is safe (i.e. provably performs no writes and no external I/O).
+# read-only. Trimmed to methods that exist in Odoo 13's base + web; later
+# versions added web_read, web_name_search, search_fetch, has_access,
+# get_views, get_formview_*, load - those are not on this allowlist.
 READ_ONLY_ALLOWLIST = frozenset({
     # Core ORM reads
     "read",
     "search",
     "search_read",
     "search_count",
-    "search_fetch",
     "exists",
     # Name helpers
     "name_search",
@@ -27,23 +37,16 @@ READ_ONLY_ALLOWLIST = frozenset({
     # Schema / view helpers (pure metadata)
     "fields_get",
     "default_get",
-    "load",
     "load_views",
-    "get_views",
     "fields_view_get",
-    "get_formview_id",
-    "get_formview_action",
     "get_empty_list_help",
-    # Access probes (read-only by definition)
+    # Access probes
     "check_access_rights",
     "check_access_rule",
-    "has_access",
     # Grouping (pure read)
     "read_group",
     "web_read_group",
     "web_search_read",
-    "web_read",
-    "web_name_search",
     # UI helpers that don't persist
     "onchange",
     # Explicit data pull
@@ -51,12 +54,24 @@ READ_ONLY_ALLOWLIST = frozenset({
 })
 
 
-def _request_is_readonly() -> bool:
+def _request_is_orc_authenticated():
+    """True iff the active request was authenticated with an ORC key.
+
+    The flag is set by ``res.users._check_credentials`` after a
+    successful header-gated key verification. Cron / test contexts have
+    ``http.request is None`` and never carry this flag.
+    """
+    req = http.request
+    return bool(req and getattr(req, "orc_api_key_authenticated", False))
+
+
+def _request_is_readonly():
+    """True iff the ORC-authenticated key is the read-only variant."""
     req = http.request
     return bool(req and getattr(req, "orc_api_key_readonly", False))
 
 
-def _deny(model_name: str, what: str) -> AccessError:
+def _deny(model_name, what):
     return AccessError(
         "This API key is read-only and cannot %(what)s on %(model)s. "
         "Allowed RPC methods: read, search, search_read, search_count, "
@@ -68,19 +83,11 @@ def _deny(model_name: str, what: str) -> AccessError:
 class Base(models.AbstractModel):
     _inherit = "base"
 
-    def _call_kw(self, name, args, kwargs):
-        """RPC gatekeeper.
-
-        Not every Odoo build routes JSON-RPC through ``_call_kw`` — in
-        some versions ``odoo.api.call_kw`` dispatches directly on the
-        method. For those paths the ORM backstop below (create / write /
-        unlink) still blocks persistence; the ``_patches`` module adds a
-        second gate at the ``api.call_kw`` level so we catch methods that
-        side-effect before they ever write.
-        """
-        if _request_is_readonly() and name not in READ_ONLY_ALLOWLIST:
-            raise _deny(self._name, f"call {name!r}")
-        return super()._call_kw(name, args, kwargs)
+    # The dispatch-level gate lives in ``_patches.py`` because Odoo 13
+    # has no ``_call_kw`` recordset hook. The ORM backstops below are
+    # belt-and-braces for paths that reach the ORM without going through
+    # ``odoo.api.call_kw`` (server actions, scheduled code wired to
+    # model methods, etc.).
 
     @api.model_create_multi
     def create(self, vals_list):

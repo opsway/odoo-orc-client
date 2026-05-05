@@ -1,3 +1,5 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_orc_audit_log_manager,orc.audit.log.manager,model_orc_audit_log,group_orc_manager,1,0,0,0
 access_orc_audit_log_user,orc.audit.log.user,model_orc_audit_log,base.group_user,0,0,0,0
+access_orc_api_access_log_manager,orc.api.access.log.manager,model_orc_api_access_log,group_orc_manager,1,0,0,0
+access_orc_api_access_log_user,orc.api.access.log.user,model_orc_api_access_log,base.group_user,0,0,0,0

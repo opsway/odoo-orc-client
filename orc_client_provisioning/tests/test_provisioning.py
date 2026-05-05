@@ -5,11 +5,11 @@ from odoo.tests import TransactionCase
 
 
 class TestOrcProvisioning(TransactionCase):
-    """
-    Exercises the Odoo-side branches of action_orc_provision /
-    action_orc_deprovision. All ORC HTTP calls are mocked — the tests
-    verify the lifecycle (key create / key revoke / row updates /
-    audit log) without hitting the network.
+    """Lifecycle tests against the new field layout (key on res.users).
+
+    All ORC HTTP calls are mocked - the tests verify the local-side
+    branches: key generation, key clearing, audit log entries, write/
+    deprovision interlocks.
     """
 
     def setUp(self):
@@ -26,72 +26,75 @@ class TestOrcProvisioning(TransactionCase):
     def _patch_client(self, **overrides):
         client = self.env["orc.client"]
         defaults = {
-            "provision_user": lambda **kw: "orc-uid-1",
-            "push_odoo_key": lambda **kw: None,
-            "deprovision_user": lambda **kw: None,
+            "provision_user": lambda *a, **kw: "orc-uid-1",
+            "push_odoo_key": lambda *a, **kw: None,
+            "deprovision_user": lambda *a, **kw: None,
         }
         defaults.update(overrides)
-        return patch.multiple(client, **{k: lambda *a, **kw: v for k, v in defaults.items()
-                                          if not callable(v)},
-                              provision_user=defaults["provision_user"],
-                              push_odoo_key=defaults["push_odoo_key"],
-                              deprovision_user=defaults["deprovision_user"])
+        return patch.multiple(client, **defaults)
 
     def test_provision_creates_key_and_records_audit(self):
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
-        self.assertEqual(self.user.orc_user_id, "orc-uid-1")
-        self.assertTrue(self.user.orc_api_key_id)
-        self.assertEqual(self.user.orc_api_key_id.name, "ORC (auto-managed)")
-        self.assertTrue(self.user.orc_provisioned_at)
-        self.assertTrue(self.user.orc_last_rotation_at)
-        # Default orc_access_level is 'read'; it must propagate to the key row.
-        self.assertEqual(self.user.orc_access_level, "read")
-        self.assertEqual(self.user.orc_api_key_id.orc_access_level, "read")
-        log = self.env["orc.audit.log"].search([("user_id", "=", self.user.id)], limit=1)
-        self.assertEqual(log.action, "provision")
+        self.user.invalidate_cache()
+        s = self.user.sudo()
+        self.assertEqual(s.orc_user_id, "orc-uid-1")
+        self.assertTrue(s.orc_api_key_hash)
+        self.assertTrue(s.orc_api_key_index)
+        self.assertEqual(len(s.orc_api_key_index), 8)
+        self.assertTrue(s.orc_api_key_rotated_at)
+        self.assertTrue(s.orc_api_key_expires_at)
+        self.assertTrue(s.orc_provisioned_at)
+        self.assertEqual(s.orc_access_level, "read")
+        log = self.env["orc.audit.log"].search(
+            [("user_id", "=", self.user.id), ("action", "=", "provision")],
+            limit=1,
+        )
+        self.assertTrue(log)
         self.assertEqual(log.status, "ok")
 
-    def test_provision_propagates_write_level_to_key(self):
+    def test_provision_propagates_write_level(self):
         self.user.orc_access_level = "write"
         captured = {}
 
-        def fake_push(**kw):
+        def fake_push(*a, **kw):
             captured.update(kw)
 
         with self._patch_client(push_odoo_key=fake_push):
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
-        self.assertEqual(self.user.orc_api_key_id.orc_access_level, "write")
-        # push_odoo_key receives the level so ORC can mirror it.
         self.assertEqual(captured.get("access_level"), "write")
 
-    def test_provision_rollback_on_push_key_failure(self):
-        def fail_push(**kw):
+    def test_provision_rollback_on_push_failure(self):
+        def fail_push(*a, **kw):
             raise UserError("boom")
 
         with self._patch_client(push_odoo_key=fail_push):
             with self.assertRaises(UserError):
                 self.user.orc_enabled = True
 
-        # Rollback: no ORC uid, no key row persists.
-        self.user.invalidate_recordset()
-        self.assertFalse(self.user.orc_user_id)
-        self.assertFalse(self.user.orc_api_key_id)
+        # Transaction rolls back -> no orc_user_id, no key fields.
+        self.user.invalidate_cache()
+        s = self.user.sudo()
+        self.assertFalse(s.orc_user_id)
+        self.assertFalse(s.orc_api_key_hash)
+        self.assertFalse(s.orc_api_key_index)
 
-    def test_deprovision_revokes_and_clears(self):
+    def test_deprovision_clears_key_and_logs(self):
         with self._patch_client():
             self.user.orc_enabled = True
-        self.assertTrue(self.user.orc_user_id)
-        key_id = self.user.orc_api_key_id.id
+        self.assertTrue(self.user.sudo().orc_user_id)
 
         with self._patch_client():
             self.user.orc_enabled = False
 
-        self.user.invalidate_recordset()
-        self.assertFalse(self.user.orc_enabled)
-        self.assertFalse(self.user.orc_user_id)
-        self.assertFalse(self.user.orc_api_key_id)
-        # Key row is gone.
-        self.assertFalse(self.env["res.users.apikeys"].search([("id", "=", key_id)]))
+        self.user.invalidate_cache()
+        s = self.user.sudo()
+        self.assertFalse(s.orc_enabled)
+        self.assertFalse(s.orc_user_id)
+        self.assertFalse(s.orc_api_key_hash)
+        self.assertFalse(s.orc_api_key_index)
+        log = self.env["orc.audit.log"].search(
+            [("user_id", "=", self.user.id), ("action", "=", "deprovision")],
+            limit=1,
+        )
+        self.assertEqual(log.status, "ok")

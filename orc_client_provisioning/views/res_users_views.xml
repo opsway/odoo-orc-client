@@ -11,18 +11,26 @@
                         <field name="orc_enabled"/>
                         <field name="orc_is_manager" invisible="1"/>
                         <field name="orc_access_level" widget="radio"
-                               invisible="orc_is_manager"
+                               attrs="{'invisible': [('orc_is_manager', '=', True)]}"
                                help="Read only: API key can call documented read methods only. Read/Write: key has no extra restriction beyond the user's own permissions. Ignored for ORC managers (they provision as ORC admin)."/>
                         <label for="orc_access_level" string="ORC API access level"
-                               invisible="not orc_is_manager"/>
-                        <div invisible="not orc_is_manager" class="text-muted">
-                            Read / Write (this user is an ORC manager — provisioned as ORC admin).
+                               attrs="{'invisible': [('orc_is_manager', '=', False)]}"/>
+                        <div attrs="{'invisible': [('orc_is_manager', '=', False)]}" class="text-muted">
+                            Read / Write (this user is an ORC manager - provisioned as ORC admin).
                         </div>
-                        <field name="orc_user_id" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_provisioned_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_last_rotation_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_api_key_id" readonly="1" invisible="not orc_enabled"/>
+                        <field name="orc_user_id" readonly="1"
+                               attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_provisioned_at" readonly="1"
+                               attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_api_key_rotated_at" readonly="1"
+                               attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_api_key_expires_at" readonly="1"
+                               attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
                     </group>
+                    <div attrs="{'invisible': [('orc_enabled', '=', False)]}">
+                        <button name="action_orc_view_access_log" type="object"
+                                string="View ORC API access log" class="btn-link"/>
+                    </div>
                 </page>
             </xpath>
         </field>
@@ -33,7 +41,7 @@
         <field name="model">res.users</field>
         <field name="inherit_id" ref="base.view_users_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//list/field[@name='login']" position="after">
+            <xpath expr="//tree/field[@name='login']" position="after">
                 <field name="orc_enabled" optional="show"/>
             </xpath>
         </field>

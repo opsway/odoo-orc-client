@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_orc_api_access_log_tree" model="ir.ui.view">
+        <field name="name">orc.api.access.log.tree</field>
+        <field name="model">orc.api.access.log</field>
+        <field name="arch" type="xml">
+            <tree create="false" edit="false" delete="false">
+                <field name="create_date"/>
+                <field name="user_id"/>
+                <field name="login_attempted" optional="hide"/>
+                <field name="endpoint"/>
+                <field name="method" optional="hide"/>
+                <field name="status"
+                       decoration-success="status=='ok'"
+                       decoration-warning="status=='denied'"
+                       decoration-danger="status=='failed'"/>
+                <field name="denial_reason" optional="show"/>
+                <field name="source_ip" optional="show"/>
+                <field name="user_agent" optional="hide"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_orc_api_access_log_search" model="ir.ui.view">
+        <field name="name">orc.api.access.log.search</field>
+        <field name="model">orc.api.access.log</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="user_id"/>
+                <field name="endpoint"/>
+                <field name="method"/>
+                <field name="source_ip"/>
+                <filter name="filter_ok" string="OK" domain="[('status', '=', 'ok')]"/>
+                <filter name="filter_denied" string="Denied (read-only)" domain="[('status', '=', 'denied')]"/>
+                <filter name="filter_failed" string="Failed (auth)" domain="[('status', '=', 'failed')]"/>
+                <group expand="0" string="Group by">
+                    <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+                    <filter name="group_endpoint" string="Endpoint" context="{'group_by': 'endpoint'}"/>
+                    <filter name="group_status" string="Status" context="{'group_by': 'status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_orc_api_access_log" model="ir.actions.act_window">
+        <field name="name">ORC API access log</field>
+        <field name="res_model">orc.api.access.log</field>
+        <field name="view_mode">tree</field>
+        <field name="search_view_id" ref="view_orc_api_access_log_search"/>
+    </record>
+</odoo>

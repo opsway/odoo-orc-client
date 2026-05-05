@@ -1,17 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo noupdate="1">
     <!--
-        Seed the ir.config_parameter keys the addon reads so they're
-        discoverable in Technical → Parameters → System Parameters right
-        after install. noupdate="1" means the values stick across
-        `-u orc_client_provisioning` upgrades — admins can override and
-        we won't clobber them.
+        Seed the ir.config_parameter keys the addon reads. noupdate="1"
+        means values stick across `-u orc_client_provisioning` upgrades:
+        admins can override and we never clobber them.
 
-        orc.org_token and orc.infrastructure_id are seeded empty on
-        purpose — they're per-install values the ORC consultant hands
-        to the Odoo admin, and an empty row makes them discoverable in
-        the System Parameters UI without requiring the admin to
-        remember the exact key names.
+        orc.org_token and orc.infrastructure_id are seeded empty - they
+        are per-install values minted by the ORC consultant.
     -->
     <record id="orc_endpoint_url" model="ir.config_parameter">
         <field name="key">orc.endpoint_url</field>
@@ -31,5 +26,10 @@
     <record id="orc_infrastructure_id" model="ir.config_parameter">
         <field name="key">orc.infrastructure_id</field>
         <field name="value"></field>
+    </record>
+
+    <record id="orc_access_log_retention_days" model="ir.config_parameter">
+        <field name="key">orc.access_log_retention_days</field>
+        <field name="value">90</field>
     </record>
 </odoo>

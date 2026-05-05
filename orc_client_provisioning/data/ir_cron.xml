@@ -1,20 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo noupdate="1">
     <!--
-        Two crons, different schedules, predictable ordering inside the
-        maintenance one. Previously three crons all ran with
-        interval=1d / nextcall=install-time, which landed them in the
-        same minute and serialised on res.users locks.
+        Three crons:
+          * sync (hourly) - reconcile + role-drift rotation
+          * maintenance (daily 02:15) - rotate keys past expiry
+          * access log prune (daily 03:00) - delete old access-log rows
 
-        The pre-migration at migrations/18.0.1.2.0/pre-migration.py
-        removes the old three records (ir_cron_orc_rotate_keys,
-        ir_cron_orc_reconcile, ir_cron_orc_orphan_cleanup) on upgrade
-        so they don't linger as orphan rows.
+        numbercall=-1: unlimited firings; without it the upstream
+        default of 1 deactivates the cron after the first run.
     -->
 
-    <!-- HOURLY — reconcile + role-drift-driven rotation. Fast, safe,
-         idempotent. Picks up a role flip (user <-> user_readonly)
-         within <= 1 hour; see docs/odoo-client-addon.md. -->
     <record id="ir_cron_orc_sync" model="ir.cron">
         <field name="name">ORC: sync roles and reconcile</field>
         <field name="model_id" ref="base.model_res_users"/>
@@ -22,16 +17,12 @@
         <field name="code">model._cron_orc_sync()</field>
         <field name="interval_number">1</field>
         <field name="interval_type">hours</field>
-        <field
-            name="nextcall"
-            eval="(DateTime.now() + relativedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')"/>
+        <field name="numbercall">-1</field>
+        <field name="nextcall"
+               eval="(DateTime.now() + relativedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')"/>
         <field name="active" eval="True"/>
     </record>
 
-    <!-- DAILY — orphan cleanup then expiration-based rotation. 02:15 UTC
-         nextcall keeps it off-peak and offset from the sync cron's
-         5-minute-past-hour slot. Odoo's scheduler re-derives nextcall
-         after the first run. -->
     <record id="ir_cron_orc_maintenance" model="ir.cron">
         <field name="name">ORC: daily maintenance</field>
         <field name="model_id" ref="base.model_res_users"/>
@@ -39,9 +30,22 @@
         <field name="code">model._cron_orc_maintenance()</field>
         <field name="interval_number">1</field>
         <field name="interval_type">days</field>
-        <field
-            name="nextcall"
-            eval="(DateTime.now().replace(hour=2, minute=15, second=0, microsecond=0) + relativedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')"/>
+        <field name="numbercall">-1</field>
+        <field name="nextcall"
+               eval="(DateTime.now().replace(hour=2, minute=15, second=0, microsecond=0) + relativedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')"/>
+        <field name="active" eval="True"/>
+    </record>
+
+    <record id="ir_cron_orc_access_log_prune" model="ir.cron">
+        <field name="name">ORC: prune access log</field>
+        <field name="model_id" ref="model_orc_api_access_log"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_orc_access_log_prune()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="numbercall">-1</field>
+        <field name="nextcall"
+               eval="(DateTime.now().replace(hour=3, minute=0, second=0, microsecond=0) + relativedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')"/>
         <field name="active" eval="True"/>
     </record>
 </odoo>

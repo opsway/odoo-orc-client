@@ -1,8 +1,9 @@
-/** @odoo-module */
+odoo.define('orc_client_provisioning.OrcSystray', function (require) {
+"use strict";
 
-import { Component } from "@odoo/owl";
-import { registry } from "@web/core/registry";
-import { session } from "@web/session";
+var SystrayMenu = require('web.SystrayMenu');
+var Widget = require('web.Widget');
+var session = require('web.session');
 
 /**
  * ORC systray icon. Visible iff the current user has orc_enabled=True
@@ -12,23 +13,32 @@ import { session } from "@web/session";
  * one-time nonce and returns an auto-submitting form that signs the
  * user in to ORC with no second password prompt.
  */
-export class OrcSystray extends Component {
-    static template = "orc_client_provisioning.OrcSystray";
-    static props = {};
+var OrcSystray = Widget.extend({
+    template: 'orc_client_provisioning.OrcSystray',
+    events: {
+        'click .o-orc-systray-btn': '_onClick',
+    },
 
-    get isEnabled() {
-        return Boolean(session.orc_enabled);
-    }
+    /**
+     * Hide the widget for users who aren't ORC-enabled. The systray
+     * manager has no native skip-me hook, so we mount empty.
+     */
+    start: function () {
+        if (!session.orc_enabled) {
+            this.$el.remove();
+        }
+        return this._super.apply(this, arguments);
+    },
 
-    onClick() {
-        window.open("/orc/sso/start", "_blank", "noopener");
-    }
-}
+    _onClick: function (ev) {
+        ev.preventDefault();
+        window.open('/orc/sso/start', '_blank', 'noopener');
+    },
+});
 
-export const orcSystrayItem = {
-    Component: OrcSystray,
-};
+// 100 keeps us left of the user menu (sequence 0).
+OrcSystray.prototype.sequence = 100;
+SystrayMenu.Items.push(OrcSystray);
 
-registry
-    .category("systray")
-    .add("orc_client_provisioning.OrcSystray", orcSystrayItem, { sequence: 100 });
+return OrcSystray;
+});

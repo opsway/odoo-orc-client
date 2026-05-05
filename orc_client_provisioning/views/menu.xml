@@ -6,9 +6,16 @@
               groups="orc_client_provisioning.group_orc_manager"/>
 
     <menuitem id="menu_orc_audit_log"
-              name="Audit log"
+              name="Provisioning audit log"
               parent="menu_orc_root"
               action="action_orc_audit_log"
               sequence="20"
+              groups="orc_client_provisioning.group_orc_manager"/>
+
+    <menuitem id="menu_orc_api_access_log"
+              name="API access log"
+              parent="menu_orc_root"
+              action="action_orc_api_access_log"
+              sequence="30"
               groups="orc_client_provisioning.group_orc_manager"/>
 </odoo>
