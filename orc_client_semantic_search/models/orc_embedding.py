@@ -146,9 +146,10 @@ class OrcEmbedding(models.Model):
             if not record:
                 # Source record was deleted between enqueue and
                 # sweep. Drop the queue row + any stale embedding.
+                q_model, q_res_id = q.model, q.res_id
                 q.unlink()
                 self.search([
-                    ("model", "=", q.model), ("res_id", "=", q.res_id),
+                    ("model", "=", q_model), ("res_id", "=", q_res_id),
                 ]).unlink()
                 continue
 
@@ -168,9 +169,10 @@ class OrcEmbedding(models.Model):
             if not text:
                 # Nothing to embed; remove any stale embedding and
                 # drop the queue row.
+                q_model, q_res_id = q.model, q.res_id
                 q.unlink()
                 self.search([
-                    ("model", "=", q.model), ("res_id", "=", q.res_id),
+                    ("model", "=", q_model), ("res_id", "=", q_res_id),
                 ]).unlink()
                 continue
 

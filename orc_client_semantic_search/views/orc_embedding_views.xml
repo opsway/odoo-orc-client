@@ -71,7 +71,7 @@
 
     <menuitem id="menu_orc_embedding_root"
               name="AI Semantic Search"
-              parent="base.menu_administration"
+              parent="base.menu_custom"
               action="action_orc_embedding_config"
               sequence="50"/>
 
