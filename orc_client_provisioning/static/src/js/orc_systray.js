@@ -15,9 +15,6 @@ var session = require('web.session');
  */
 var OrcSystray = Widget.extend({
     template: 'orc_client_provisioning.OrcSystray',
-    events: {
-        'click .o-orc-systray-btn': '_onClick',
-    },
 
     /**
      * Hide the widget for users who aren't ORC-enabled. The systray
@@ -26,7 +23,9 @@ var OrcSystray = Widget.extend({
     start: function () {
         if (!session.orc_enabled) {
             this.$el.remove();
+            return this._super.apply(this, arguments);
         }
+        this.$('.o-orc-systray-btn').on('click', this._onClick.bind(this));
         return this._super.apply(this, arguments);
     },
 

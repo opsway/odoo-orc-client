@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="orc_client_provisioning.OrcSystray">
-        <div class="o-dropdown dropdown o-orc-systray">
-            <button type="button"
-                    class="btn btn-link o-orc-systray-btn"
-                    title="Open ORC">
-                <img src="/orc_client_provisioning/static/description/icon.svg"
-                     class="o-orc-systray-icon" alt="Open ORC"/>
-            </button>
-        </div>
+        <li class="o_mail_systray_item o-orc-systray">
+            <a role="button" href="javascript:void(0)" class="o-orc-systray-btn" title="Open ORC">
+                <img src="/orc_client_provisioning/static/description/icon.svg" class="o-orc-systray-icon"
+                     alt="Open ORC"/>
+            </a>
+        </li>
     </t>
 </templates>

@@ -4,16 +4,16 @@
         <field name="name">orc.api.access.log.tree</field>
         <field name="model">orc.api.access.log</field>
         <field name="arch" type="xml">
-            <tree create="false" edit="false" delete="false">
+            <tree create="false" edit="false" delete="false"
+                  decoration-success="status=='ok'"
+                  decoration-warning="status=='denied'"
+                  decoration-danger="status=='failed'">
                 <field name="create_date"/>
                 <field name="user_id"/>
                 <field name="login_attempted" optional="hide"/>
                 <field name="endpoint"/>
                 <field name="method" optional="hide"/>
-                <field name="status"
-                       decoration-success="status=='ok'"
-                       decoration-warning="status=='denied'"
-                       decoration-danger="status=='failed'"/>
+                <field name="status"/>
                 <field name="denial_reason" optional="show"/>
                 <field name="source_ip" optional="show"/>
                 <field name="user_agent" optional="hide"/>

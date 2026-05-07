@@ -1,8 +1,8 @@
 .o-orc-systray {
-    .o-orc-systray-btn {
-        padding: 0 .5rem;
+    > a.o-orc-systray-btn {
         display: flex;
         align-items: center;
+        justify-content: center;
     }
     .o-orc-systray-icon {
         width: 22px;

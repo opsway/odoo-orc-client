@@ -4,14 +4,14 @@
         <field name="name">orc.audit.log.tree</field>
         <field name="model">orc.audit.log</field>
         <field name="arch" type="xml">
-            <tree create="false" edit="false" delete="false">
+            <tree create="false" edit="false" delete="false"
+                       decoration-success="status=='ok'"
+                       decoration-danger="status=='error'"
+                       decoration-warning="status=='drift'">
                 <field name="create_date"/>
                 <field name="user_id"/>
                 <field name="action"/>
-                <field name="status"
-                       decoration-success="status=='ok'"
-                       decoration-danger="status=='error'"
-                       decoration-warning="status=='drift'"/>
+                <field name="status"/>
                 <field name="error" optional="hide"/>
             </tree>
         </field>
