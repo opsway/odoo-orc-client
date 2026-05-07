@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <!--
+        Reindex sweep. Interval is set from the global config's
+        ``cron_interval_minutes`` field on first install (5 min by
+        default). Operators can edit the cron directly under
+        Settings → Technical → Scheduled Actions if they want a
+        different cadence than what the config exposes.
+    -->
+    <record id="ir_cron_orc_embedding_reindex" model="ir.cron">
+        <field name="name">ORC Semantic Search — reindex sweep</field>
+        <field name="model_id" ref="model_orc_embedding"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_reindex_sweep()</field>
+        <field name="active" eval="True"/>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="doall" eval="False"/>
+    </record>
+
+</odoo>

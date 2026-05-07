@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <!--
+        Singleton global config row. Provider fields stay empty
+        until the operator fills them in via Settings → Technical
+        → AI Semantic Search. Cron interval and daily cap have
+        sensible defaults so the row is usable as soon as
+        provider creds are filled.
+    -->
+    <record id="orc_embedding_config_global" model="orc.embedding.config">
+        <field name="is_global">True</field>
+        <field name="provider_url">https://api.openai.com/v1/embeddings</field>
+        <field name="provider_kind">openai</field>
+        <field name="provider_model">text-embedding-3-small</field>
+        <field name="vector_dim">1536</field>
+        <field name="cron_interval_minutes">5</field>
+        <field name="daily_token_cap">1000000</field>
+    </record>
+
+    <!--
+        v1 indexed corpus: knowledge.article only. Adding more
+        models is a config-row change (create another row, set
+        text_field_path + text_extractor, save).
+    -->
+    <record id="orc_embedding_config_knowledge_article" model="orc.embedding.config">
+        <field name="is_global">False</field>
+        <field name="model_name">knowledge.article</field>
+        <field name="enabled">True</field>
+        <field name="text_field_path">body</field>
+        <field name="text_extractor">html_strip</field>
+    </record>
+
+</odoo>
