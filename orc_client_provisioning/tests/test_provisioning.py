@@ -24,14 +24,19 @@ class TestOrcProvisioning(TransactionCase):
         icp.set_param("orc.infrastructure_id", "11111111-1111-1111-1111-111111111111")
 
     def _patch_client(self, **overrides):
-        client = self.env["orc.client"]
+        # Patch the registered class, not the recordset: Odoo returns
+        # a fresh recordset each ``env["orc.client"]`` call, and
+        # patch.multiple on the recordset only sticks for that one
+        # instance. Patching ``type(...)`` makes the patch apply to
+        # every subsequent lookup.
+        client_cls = type(self.env["orc.client"])
         defaults = {
             "provision_user": lambda *a, **kw: "orc-uid-1",
             "push_odoo_key": lambda *a, **kw: None,
-            "deprovision_user": lambda *a, **kw: None,
+            "revoke_infra_access": lambda *a, **kw: None,
         }
         defaults.update(overrides)
-        return patch.multiple(client, **defaults)
+        return patch.multiple(client_cls, **defaults)
 
     def test_provision_creates_key_and_records_audit(self):
         with self._patch_client():
@@ -45,7 +50,6 @@ class TestOrcProvisioning(TransactionCase):
         self.assertTrue(s.orc_api_key_rotated_at)
         self.assertTrue(s.orc_api_key_expires_at)
         self.assertTrue(s.orc_provisioned_at)
-        self.assertEqual(s.orc_access_level, "read")
         log = self.env["orc.audit.log"].search(
             [("user_id", "=", self.user.id), ("action", "=", "provision")],
             limit=1,
@@ -53,8 +57,7 @@ class TestOrcProvisioning(TransactionCase):
         self.assertTrue(log)
         self.assertEqual(log.status, "ok")
 
-    def test_provision_propagates_write_level(self):
-        self.user.orc_access_level = "write"
+    def test_provision_passes_odoo_login_to_push(self):
         captured = {}
 
         def fake_push(*a, **kw):
@@ -62,7 +65,8 @@ class TestOrcProvisioning(TransactionCase):
 
         with self._patch_client(push_odoo_key=fake_push):
             self.user.orc_enabled = True
-        self.assertEqual(captured.get("access_level"), "write")
+        self.assertEqual(captured.get("odoo_login"), self.user.login)
+        self.assertNotIn("access_level", captured)
 
     def test_provision_rollback_on_push_failure(self):
         def fail_push(*a, **kw):
@@ -79,7 +83,12 @@ class TestOrcProvisioning(TransactionCase):
         self.assertFalse(s.orc_api_key_hash)
         self.assertFalse(s.orc_api_key_index)
 
-    def test_deprovision_clears_key_and_logs(self):
+    def test_deprovision_clears_key_keeps_breadcrumb_logs(self):
+        """Per-infra revoke pattern: clear local key fields, but keep
+        ``orc_user_id`` and ``orc_provisioned_at`` so re-ticking
+        ``orc_enabled`` later replays provisioning against the same
+        ORC identity instead of creating a new one.
+        """
         with self._patch_client():
             self.user.orc_enabled = True
         self.assertTrue(self.user.sudo().orc_user_id)
@@ -90,9 +99,14 @@ class TestOrcProvisioning(TransactionCase):
         self.user.invalidate_cache()
         s = self.user.sudo()
         self.assertFalse(s.orc_enabled)
-        self.assertFalse(s.orc_user_id)
+        # Breadcrumb: orc identity survives.
+        self.assertEqual(s.orc_user_id, "orc-uid-1")
+        self.assertTrue(s.orc_provisioned_at)
+        # Key material is cleared.
         self.assertFalse(s.orc_api_key_hash)
         self.assertFalse(s.orc_api_key_index)
+        self.assertFalse(s.orc_api_key_rotated_at)
+        self.assertFalse(s.orc_api_key_expires_at)
         log = self.env["orc.audit.log"].search(
             [("user_id", "=", self.user.id), ("action", "=", "deprovision")],
             limit=1,

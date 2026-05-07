@@ -1,7 +1,10 @@
 {
     "name": "ORC Client - Provisioning",
-    "version": "13.0.1.0.0",
-    "summary": "Provision Odoo users into OpsWay ORC with auto-rotated API keys, header-gated RPC auth, immutable audit logs, and single-click SSO.",
+    "version": "13.0.2.0.0",
+    "summary": (
+        "Provision Odoo users into OpsWay ORC with auto-rotated API keys, "
+        "header-gated RPC auth, immutable audit logs, and single-click SSO."
+    ),
     "description": """
 ORC Client - Provisioning (Odoo 13)
 ====================================

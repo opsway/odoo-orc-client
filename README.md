@@ -84,10 +84,10 @@ With the header but a bad key, `_check_credentials` records a `failed`
 row in `orc.api.access.log` and raises `AccessDenied`; the addon never
 falls back to password auth on a header-marked request.
 
-For keys minted with `orc_access_level = 'read'`, every RPC method
-not on the read-only allowlist (read, search, search_read,
-search_count, name_search, fields_get, default_get,
-check_access_rights, …) is rejected before its body runs.
+Every key has the user's full Odoo permissions. Admin promotion in
+ORC happens in the ORC dashboard, not via Odoo group membership; the
+local `orc_is_manager` flag (derived from `group_orc_manager`) only
+drives form affordances.
 
 ## Audit logs
 

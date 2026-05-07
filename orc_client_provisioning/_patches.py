@@ -7,12 +7,15 @@ so an ``_inherit = 'base'`` gate would only catch methods invoked via
 plain Python.
 
 We install a thin wrapper on ``odoo.api.call_kw`` so every dispatched
-RPC method passes through one chokepoint that:
+RPC method passes through one chokepoint that records the call in
+``orc.api.access.log`` when the request was authenticated by an ORC
+key (header-marked + key-verified upstream in
+``res.users._check_credentials``). All other requests fall through
+to the original dispatcher unchanged.
 
-  1. Records the call in ``orc.api.access.log`` when the request was
-     authenticated by an ORC key (header-marked + key-verified upstream
-     in ``res.users._check_credentials``).
-  2. Enforces the read-only allowlist for keys flagged read-only.
+The dispatch-level read-only allowlist that lived here in 13.0.1.x
+was removed in 13.0.2.0.0 to align with v18 main; every ORC-managed
+key now carries the user's full Odoo permissions.
 
 Idempotent: installing twice is a no-op.
 """
@@ -20,13 +23,8 @@ import functools
 import logging
 
 import odoo.api
-from odoo.exceptions import AccessError
 
-from .models.base import (
-    READ_ONLY_ALLOWLIST,
-    _request_is_orc_authenticated,
-    _request_is_readonly,
-)
+from .models.base import _request_is_orc_authenticated
 
 _logger = logging.getLogger(__name__)
 
@@ -44,31 +42,21 @@ def _orc_call_kw(model, name, args, kwargs):
 
     Falls through to the original for any request that wasn't
     authenticated by an ORC key. For ORC-authenticated requests, logs
-    every call and enforces the read-only allowlist.
+    the call and dispatches normally.
     """
     if not _request_is_orc_authenticated():
         return _ORIGINAL_CALL_KW(model, name, args, kwargs)
 
     env = getattr(model, "env", None)
-    denied = _request_is_readonly() and name not in READ_ONLY_ALLOWLIST
     if env is not None:
         try:
             env["orc.api.access.log"].sudo()._record(
                 endpoint="%s.%s" % (getattr(model, "_name", "?"), name),
                 method=name,
-                status="denied" if denied else "ok",
-                denial_reason=("read-only key, method %r not allowlisted" % name)
-                              if denied else None,
+                status="ok",
             )
         except Exception:  # pragma: no cover - never break dispatch
             _logger.exception("[orc] failed to record api access log")
-    if denied:
-        raise AccessError(
-            "This API key is read-only and cannot call %r on %s. "
-            "Allowed RPC methods: read, search, search_read, "
-            "search_count, name_search, fields_get, default_get, "
-            "check_access_rights." % (name, getattr(model, "_name", "?"))
-        )
     return _ORIGINAL_CALL_KW(model, name, args, kwargs)
 
 
@@ -78,8 +66,7 @@ setattr(_orc_call_kw, _SENTINEL, True)
 def _install():
     if _ORIGINAL_CALL_KW is None:
         _logger.info(
-            "[orc] odoo.api.call_kw not found - skipping dispatch gate. "
-            "ORM backstop on create/write/unlink still applies."
+            "[orc] odoo.api.call_kw not found - skipping dispatch gate."
         )
         return
     if getattr(odoo.api.call_kw, _SENTINEL, False):

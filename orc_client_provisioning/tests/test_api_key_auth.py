@@ -4,7 +4,7 @@ Verifies:
   * ``X-ORC-Auth`` header is required for the API-key path to engage;
     without it ``_check_credentials`` falls through to password auth.
   * With the header, valid keys authenticate successfully and stamp
-    request flags (orc_api_key_authenticated, orc_api_key_readonly).
+    ``orc_api_key_authenticated`` on the request.
   * With the header, invalid keys raise AccessDenied AND record a
     ``failed`` row in ``orc.api.access.log``.
   * Expired keys do not authenticate.
@@ -18,7 +18,7 @@ from odoo.exceptions import AccessDenied
 from odoo.tests import TransactionCase
 
 
-class _FakeRequest(object):
+class _FakeRequest:
     def __init__(self, headers=None):
         self.httprequest = MagicMock()
         self.httprequest.headers = headers or {}
@@ -64,8 +64,6 @@ class TestApiKeyAuth(TransactionCase):
             # Should not raise.
             user._check_credentials(self.raw_key)
             self.assertTrue(getattr(req, "orc_api_key_authenticated", False))
-            # Default access_level is 'read'.
-            self.assertTrue(getattr(req, "orc_api_key_readonly", False))
 
         # Success row recorded.
         log = self.env["orc.api.access.log"].search(
@@ -96,14 +94,6 @@ class TestApiKeyAuth(TransactionCase):
             user = self.user.with_user(self.user)
             with self.assertRaises(AccessDenied):
                 user._check_credentials(self.raw_key)
-
-    def test_write_level_key_is_not_readonly(self):
-        self.user.sudo().write({"orc_access_level": "write"})
-        with _simulate_request(headers={"X-ORC-Auth": "1"}) as req:
-            user = self.user.with_user(self.user)
-            user._check_credentials(self.raw_key)
-            self.assertTrue(getattr(req, "orc_api_key_authenticated", False))
-            self.assertFalse(getattr(req, "orc_api_key_readonly", False))
 
     def test_truncated_candidate_does_not_match(self):
         """A candidate shorter than INDEX_SIZE chars must not slice-match."""

@@ -1,6 +1,6 @@
 """ORC provisioning fields and lifecycle on res.users.
 
-Design departures from the Odoo 18 version:
+Design departures from the Odoo 18 version (kept v13-specific):
 
 * The Odoo API key lives directly on ``res.users`` (hash + leading-hex
   index) - there is no separate ``res.users.apikeys`` model in Odoo 13
@@ -9,6 +9,18 @@ Design departures from the Odoo 18 version:
   ``X-ORC-Auth`` header. Password auth for everyone else is untouched.
 * Every successful key-auth and every failed key-auth attempt is
   recorded in the immutable ``orc.api.access.log``.
+
+Aligned with v18 main:
+
+* ``_orc_desired_role`` always returns ``"member"`` - admin promotion
+  is an ORC-dashboard action, not Odoo's authority.
+* No read/write capability split. Every ORC-managed key has the user's
+  full Odoo permissions; the request-scoped read-only allowlist is
+  gone (see ``models/base.py`` and ``_patches.py``).
+* ``_cron_orc_reconcile`` is a true two-way membership sync; sync
+  status is stamped on each user row via ``_orc_stamp_sync``.
+* Unticking ``orc_enabled`` is per-infra revoke (keeps ``orc_user_id``
+  as a breadcrumb so re-tick recovers the same ORC identity).
 """
 import binascii
 import logging
@@ -81,26 +93,39 @@ class ResUsers(models.Model):
         readonly=True,
         copy=False,
     )
-    orc_access_level = fields.Selection(
-        [("read", "Read only"), ("write", "Read / Write")],
-        string="ORC API access level",
-        default="read",
-        help=(
-            "Controls what the generated ORC API key is allowed to do "
-            "over XML-RPC / JSON-RPC. 'Read only' (default) lets the "
-            "agent inspect data without mutating anything. "
-            "Ignored for ORC managers - they are always provisioned as "
-            "ORC admins with full access."
-        ),
-    )
     orc_is_manager = fields.Boolean(
         string="Is ORC manager",
         compute="_compute_orc_is_manager",
         help=(
             "True when the user belongs to the ORC manager group. "
-            "Drives the ORC-side role: managers provision as admin; "
-            "everyone else as user."
+            "Drives form affordances; admin promotion is an "
+            "ORC-dashboard action, not Odoo's authority."
         ),
+    )
+    # Per-user observability for the reconcile cron + write-on-flip
+    # path. Stamped by every cron pass and the write() override -
+    # NULL means "never synced." Surfaced on the user form so admins
+    # can tell at a glance whether the cron picked up a recent flip
+    # of orc_enabled.
+    orc_last_sync_at = fields.Datetime(
+        string="Last synced at",
+        readonly=True,
+        copy=False,
+    )
+    orc_last_sync_status = fields.Selection(
+        selection=[
+            ("ok", "OK"),
+            ("drift", "Drift"),
+            ("error", "Error"),
+        ],
+        string="Last sync status",
+        readonly=True,
+        copy=False,
+    )
+    orc_last_sync_message = fields.Char(
+        string="Last sync message",
+        readonly=True,
+        copy=False,
     )
 
     @api.depends("groups_id")
@@ -119,9 +144,9 @@ class ResUsers(models.Model):
 
         Header convention: any inbound XML-RPC / JSON-RPC request that
         carries ``X-ORC-Auth`` is asserting "I am ORC; please match my
-        password against the API key on this user". On match we set
-        request flags so the dispatch wrapper (in ``_patches.py``) knows
-        to log every method call and enforce the read-only allowlist.
+        password against the API key on this user". On match we set a
+        request flag so the dispatch wrapper (in ``_patches.py``) knows
+        to log every method call.
 
         Without the header, the upstream password check runs unchanged.
         With the header but a bad key, we log the failure and raise -
@@ -129,12 +154,12 @@ class ResUsers(models.Model):
         """
         req = http.request
         if not req or not req.httprequest.headers.get("X-ORC-Auth"):
-            return super()._check_credentials(password)
+            super()._check_credentials(password)
+            return
 
         # Header-marked. Verify against the stored ORC key for self.
         if self._orc_verify_api_key(password):
             req.orc_api_key_authenticated = True
-            req.orc_api_key_readonly = (self.orc_access_level == "read")
             self.env["orc.api.access.log"].sudo()._record(
                 status="ok",
                 user_id=self.env.uid,
@@ -187,26 +212,15 @@ class ResUsers(models.Model):
     # --- Provisioning lifecycle ----------------------------------------------
 
     def _orc_desired_role(self):
-        """Pick the ORC role this user should hold.
+        """Role sent to ORC on provision.
 
-        ORC has exactly two primary roles: ``admin`` and ``user``. The
-        read-only / read-write distinction is a separate capability
-        pushed via ``push_odoo_key(access_level=...)``.
+        The addon only provisions ``member`` - admin promotion happens
+        in the ORC dashboard, not here. ``orc_is_manager`` still drives
+        view affordances but no longer auto-promotes the user to ORC
+        admin.
         """
         self.ensure_one()
-        return "admin" if self.orc_is_manager else "user"
-
-    def _orc_desired_access(self):
-        """Effective Odoo-RPC capability for this user's key.
-
-        Managers always get ``write`` (radio is hidden in the form for
-        them). For non-managers, the local ``orc_access_level`` selector
-        is the source of truth.
-        """
-        self.ensure_one()
-        if self.orc_is_manager:
-            return "write"
-        return "read" if self.orc_access_level == "read" else "write"
+        return "member"
 
     def _orc_generate_api_key(self):
         """Mint a new ORC key for this user. Returns the raw value once.
@@ -239,6 +253,19 @@ class ResUsers(models.Model):
             "orc_api_key_expires_at": False,
         })
 
+    def _orc_stamp_sync(self, status, message=""):
+        """Stamp the last-sync triple on this recordset.
+
+        Always called from a cron's per-user try/except so an exception
+        here never bubbles up. Truncates the message so a long stack
+        trace doesn't blow out the column.
+        """
+        self.sudo().write({
+            "orc_last_sync_at": fields.Datetime.now(),
+            "orc_last_sync_status": status,
+            "orc_last_sync_message": (message or "")[:240],
+        })
+
     def action_orc_provision(self):
         """Provision / re-provision this user in ORC.
 
@@ -264,27 +291,28 @@ class ResUsers(models.Model):
 
             new_raw_key = user._orc_generate_api_key()
 
-            try:
-                desired_role = user._orc_desired_role()
-                orc_uid = client.provision_user(
-                    email=user.login,
-                    name=user.name or user.login,
-                    role=desired_role,
-                )
-                if not user.orc_user_id:
-                    user.sudo().write({"orc_user_id": orc_uid})
+            # If anything below raises, the surrounding transaction
+            # rolls back and the old key fields come back; nothing to
+            # clean up on the Odoo side.
+            desired_role = user._orc_desired_role()
+            orc_uid = client.provision_user(
+                email=user.login,
+                name=user.name or user.login,
+                role=desired_role,
+            )
+            if not user.orc_user_id:
+                user.sudo().write({"orc_user_id": orc_uid})
 
-                effective_level = user._orc_desired_access()
-                client.push_odoo_key(
-                    email=user.login,
-                    api_key=new_raw_key,
-                    access_level=effective_level,
-                )
-            except Exception:
-                # Don't try to clean up - the surrounding transaction
-                # rolls back and the old key fields come back. Just
-                # propagate.
-                raise
+            # Push the new Odoo API key. ORC stores it encrypted; the
+            # agent will use it to call Odoo tools as this user.
+            # ``odoo_login`` covers the case where login != email
+            # (e.g. the built-in ``admin`` user) - ORC needs the exact
+            # login string to authenticate back into Odoo.
+            client.push_odoo_key(
+                email=user.login,
+                api_key=new_raw_key,
+                odoo_login=user.login,
+            )
 
             if not user.orc_provisioned_at:
                 user.sudo().write({"orc_provisioned_at": fields.Datetime.now()})
@@ -296,12 +324,25 @@ class ResUsers(models.Model):
             )
 
     def action_orc_deprovision(self):
+        """Revoke this user's access on THIS Odoo instance only.
+
+        Per-infra revoke pattern: drop the local key fields and tell
+        ORC to delete the matching ``user_odoo_keys`` row + the
+        ``infrastructure.member`` engine relation. The user's
+        organization membership and historical task rooms stay intact
+        on the ORC side; full offboarding is a dashboard action.
+
+        ``orc_user_id`` and ``orc_provisioned_at`` are preserved as
+        breadcrumbs so re-ticking ``orc_enabled`` later replays
+        provisioning against the same ORC identity rather than
+        creating a new one (``provision_user`` is idempotent ORC-side).
+        """
         for user in self:
             if not user.orc_user_id:
                 continue
             client = self.env["orc.client"]
             try:
-                client.deprovision_user(user_id=user.orc_user_id)
+                client.revoke_infra_access(email=user.login)
             except UserError as exc:
                 self.env["orc.audit.log"].sudo()._record(
                     user_id=user.id,
@@ -312,11 +353,6 @@ class ResUsers(models.Model):
                 raise
 
             user._orc_clear_api_key()
-            user.sudo().write({
-                "orc_enabled": False,
-                "orc_user_id": False,
-                "orc_provisioned_at": False,
-            })
             self.env["orc.audit.log"].sudo()._record(
                 user_id=user.id,
                 action="deprovision",
@@ -325,17 +361,33 @@ class ResUsers(models.Model):
 
     # --- Toggle hook ---------------------------------------------------------
 
+    # Re-entry guard. The (de)provision flows write back to res.users
+    # to record their bookkeeping (orc_user_id, orc_last_sync_*); without
+    # a marker the write override below would re-trigger them and
+    # recurse forever. Anything tagged with this context bypasses the
+    # provisioning logic and just persists the row.
+    _ORC_INFLIGHT_CTX = "orc_provisioning_inflight"
+
     def write(self, vals):
-        if "orc_enabled" not in vals:
+        if (
+            "orc_enabled" not in vals
+            or self.env.context.get(self._ORC_INFLIGHT_CTX)
+        ):
             return super().write(vals)
 
         flip_to = vals["orc_enabled"]
-        res = super().write(vals)
-        for user in self:
+        # Mark the cascade so action_orc_provision / action_orc_deprovision's
+        # internal writes (orc_user_id, orc_api_key_*, orc_last_sync_*, and
+        # in deprovision orc_enabled itself) can persist without re-entering.
+        self_inflight = self.with_context(**{self._ORC_INFLIGHT_CTX: True})
+        res = super(ResUsers, self_inflight).write(vals)
+        for user in self_inflight:
             if flip_to and not user.orc_user_id:
                 user.action_orc_provision()
+                user._orc_stamp_sync("ok", "provisioned on save")
             elif not flip_to and user.orc_user_id:
                 user.action_orc_deprovision()
+                user._orc_stamp_sync("ok", "deprovisioned on save")
         return res
 
     # --- Crons ---------------------------------------------------------------
@@ -345,7 +397,9 @@ class ResUsers(models.Model):
         """Rotate keys whose expiry has passed.
 
         With per-user storage there's no orphan to clean up; expiry
-        comparison on ``orc_api_key_expires_at`` is enough.
+        comparison on ``orc_api_key_expires_at`` is enough. Every
+        per-user branch stamps ``orc_last_sync_*`` so the form view
+        reflects the rotation outcome.
         """
         cutoff = fields.Datetime.now()
         due = self.search([
@@ -358,8 +412,10 @@ class ResUsers(models.Model):
         for user in due:
             try:
                 user.action_orc_provision()
+                user._orc_stamp_sync("ok", "key rotated")
             except Exception as exc:
                 _logger.warning("[orc] rotation failed for %s: %s", user.login, exc)
+                user._orc_stamp_sync("error", "rotation failed: %s" % exc)
                 self.env["orc.audit.log"].sudo()._record(
                     user_id=user.id,
                     action="rotate",
@@ -369,100 +425,109 @@ class ResUsers(models.Model):
 
     @api.model
     def _cron_orc_reconcile(self):
-        """Reassert authority for tier and capability drift.
+        """Two-way reconcile: local Odoo is the source of truth.
 
-        * Admin vs user *tier*: Odoo group is authoritative.
-        * Read vs write *capability* within the user tier: ORC is
-          authoritative; we mirror it locally and re-provision.
+        Per email in (local_enabled u remote):
+          - local_enabled + remote present  -> in sync (stamp ok)
+          - local_enabled + remote missing  -> re-provision to ORC
+          - remote present + local disabled -> revoke from ORC
+          - remote present + no local user  -> orphan; audit-log only
+
+        Each per-user branch wraps the work in its own try/except and
+        always stamps ``orc_last_sync_*`` so admins can see staleness
+        on the user form. A failure in ``client.list_users()`` itself
+        stamps every ``orc_enabled=True`` user as error so the
+        dashboard surfaces a network/auth outage immediately.
         """
         client = self.env["orc.client"]
+        local_enabled = self.search([("orc_enabled", "=", True)])
+
         try:
             data = client.list_users()
         except UserError as exc:
-            _logger.warning("[orc] reconcile: %s", exc)
+            _logger.warning("[orc] reconcile fetch failed: %s", exc)
+            for user in local_enabled:
+                user._orc_stamp_sync("error", "reconcile fetch failed: %s" % exc)
+            self.env["orc.audit.log"].sudo()._record(
+                action="reconcile",
+                status="error",
+                error=str(exc)[:1000],
+            )
             return
+
         remote_users = {
             u.get("email"): u
             for u in data.get("users", [])
             if u.get("email")
         }
-        local_enabled = self.search([("orc_enabled", "=", True)])
-        local_emails = {u.login for u in local_enabled}
+        local_by_email = {u.login: u for u in local_enabled}
 
-        drift_remote_only = set(remote_users) - local_emails
-        drift_local_only = local_emails - set(remote_users)
-        if drift_remote_only or drift_local_only:
-            self.env["orc.audit.log"].sudo()._record(
-                action="reconcile",
-                status="drift",
-                error=("remote-only: %s local-only: %s"
-                       % (sorted(drift_remote_only), sorted(drift_local_only)))[:1000],
-            )
-
-        for user in local_enabled:
-            remote = remote_users.get(user.login)
-            if not remote:
+        # Direction A - local enabled, sync forward.
+        for email, user in local_by_email.items():
+            if email in remote_users:
+                user._orc_stamp_sync("ok", "in sync")
                 continue
-            remote_role = (remote.get("role") or "").strip()
-            if not remote_role:
-                continue
-            remote_access = (remote.get("odoo_access") or "").strip()
-            if remote_role == "user_readonly":
-                remote_role = "user"
-                remote_access = remote_access or "read"
-
-            odoo_is_admin = user.orc_is_manager
-            orc_is_admin = remote_role == "admin"
-            if odoo_is_admin != orc_is_admin:
-                _logger.info(
-                    "[orc] tier drift for %s: odoo_manager=%s orc_role=%s - re-provisioning",
-                    user.login, odoo_is_admin, remote_role,
-                )
-                try:
-                    user.action_orc_provision()
-                except Exception as exc:
-                    _logger.warning(
-                        "[orc] tier-drift re-provision failed for %s: %s",
-                        user.login, exc,
-                    )
-                    self.env["orc.audit.log"].sudo()._record(
-                        user_id=user.id,
-                        action="rotate",
-                        status="error",
-                        error="tier-drift re-provision: %s" % exc,
-                    )
-                continue
-
-            if odoo_is_admin:
-                continue
-
-            if not remote_access:
-                continue
-            expected_level = remote_access if remote_access in ("read", "write") else None
-            if not expected_level or user.orc_access_level == expected_level:
-                continue
-            _logger.info(
-                "[orc] capability drift for %s: odoo_access=%s (local %s) - rotating",
-                user.login, expected_level, user.orc_access_level,
-            )
-            user.sudo().write({"orc_access_level": expected_level})
             try:
                 user.action_orc_provision()
+                user._orc_stamp_sync("ok", "re-provisioned to ORC")
             except Exception as exc:
                 _logger.warning(
-                    "[orc] capability-drift rotation failed for %s: %s",
+                    "[orc] reconcile re-provision failed for %s: %s",
                     user.login, exc,
                 )
+                user._orc_stamp_sync("error", "re-provision failed: %s" % exc)
                 self.env["orc.audit.log"].sudo()._record(
                     user_id=user.id,
-                    action="rotate",
+                    action="reconcile",
                     status="error",
-                    error="capability-drift rotation: %s" % exc,
+                    error=str(exc)[:1000],
                 )
+
+        # Direction B - remote present without a corresponding local
+        # ``orc_enabled=True`` row. Two sub-cases:
+        #   1. Local user exists with orc_enabled=False -> revoke.
+        #   2. No local user at all -> orphan, log only (we don't
+        #      auto-create res.users from the remote list).
+        residual_remote = set(remote_users) - set(local_by_email)
+        if residual_remote:
+            local_disabled_matches = self.search([
+                ("login", "in", list(residual_remote)),
+                ("orc_enabled", "=", False),
+            ])
+            disabled_by_email = {u.login: u for u in local_disabled_matches}
+            for email in residual_remote:
+                user = disabled_by_email.get(email)
+                if user is None:
+                    self.env["orc.audit.log"].sudo()._record(
+                        action="orphan_remote_user",
+                        status="drift",
+                        error=("no local res.users for %s" % email)[:1000],
+                    )
+                    continue
+                try:
+                    client.revoke_infra_access(email=email)
+                    user._orc_stamp_sync("ok", "deprovisioned from ORC")
+                except Exception as exc:
+                    _logger.warning(
+                        "[orc] reconcile deprovision failed for %s: %s",
+                        email, exc,
+                    )
+                    user._orc_stamp_sync("error", "deprovision failed: %s" % exc)
+                    self.env["orc.audit.log"].sudo()._record(
+                        user_id=user.id,
+                        action="reconcile",
+                        status="error",
+                        error=str(exc)[:1000],
+                    )
 
     @api.model
     def _cron_orc_sync(self):
-        """Hourly. Reconcile + role-drift rotation."""
+        """Hourly. Fast, safe, idempotent.
+
+        Runs the two-way reconcile so a flip of ``orc_enabled`` on
+        either side propagates within <= 1 hour without waiting for
+        the regular rotation-by-expiration schedule.
+        """
         self._cron_orc_reconcile()
 
     @api.model

@@ -34,6 +34,7 @@ class OrcAuditLog(models.Model):
             ("deprovision", "Deprovision"),
             ("sso", "SSO handoff"),
             ("reconcile", "Reconcile"),
+            ("orphan_remote_user", "Orphan remote user"),
         ],
         required=True,
         readonly=True,

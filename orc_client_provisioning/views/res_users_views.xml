@@ -10,14 +10,15 @@
                     <group>
                         <field name="orc_enabled"/>
                         <field name="orc_is_manager" invisible="1"/>
-                        <field name="orc_access_level" widget="radio"
-                               attrs="{'invisible': [('orc_is_manager', '=', True)]}"
-                               help="Read only: API key can call documented read methods only. Read/Write: key has no extra restriction beyond the user's own permissions. Ignored for ORC managers (they provision as ORC admin)."/>
-                        <label for="orc_access_level" string="ORC API access level"
-                               attrs="{'invisible': [('orc_is_manager', '=', False)]}"/>
-                        <div attrs="{'invisible': [('orc_is_manager', '=', False)]}" class="text-muted">
-                            Read / Write (this user is an ORC manager - provisioned as ORC admin).
-                        </div>
+                        <field name="orc_last_sync_at" readonly="1"
+                               attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_last_sync_status" widget="badge"
+                               decoration-success="orc_last_sync_status == 'ok'"
+                               decoration-warning="orc_last_sync_status == 'drift'"
+                               decoration-danger="orc_last_sync_status == 'error'"
+                               attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_last_sync_message" readonly="1"
+                               attrs="{'invisible': [('orc_last_sync_message', '=', False)]}"/>
                         <field name="orc_user_id" readonly="1"
                                attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
                         <field name="orc_provisioned_at" readonly="1"

@@ -65,7 +65,7 @@ class OrcClientConfig(models.AbstractModel):
             _logger.warning("ORC %s %s failed: %s", method, path, exc)
             raise UserError(_(
                 "Failed to reach ORC at %(url)s: %(err)s"
-            ) % {"url": url, "err": exc})
+            ) % {"url": url, "err": exc}) from exc
 
         if resp.status_code >= 400:
             try:
@@ -91,12 +91,16 @@ class OrcClientConfig(models.AbstractModel):
         return True
 
     @api.model
-    def provision_user(self, email, name, role="user"):
+    def provision_user(self, email, name, role="member"):
         """Create user + membership in ORC. Returns user_id.
 
         Password is random and never shown. Users only ever sign in
         via SSO handoff; Synapse holds the hash but no Odoo path
         issues it.
+
+        ORC accepts ``member`` or ``admin`` on this endpoint; admin
+        promotion is performed in the ORC dashboard, not from this
+        addon, so the addon always passes ``member``.
         """
         password = secrets.token_urlsafe(32)
         data = self._request(
@@ -110,22 +114,46 @@ class OrcClientConfig(models.AbstractModel):
         return user_id
 
     @api.model
-    def push_odoo_key(self, email, api_key, access_level="read"):
+    def push_odoo_key(self, email, api_key, odoo_login=None):
+        """Register an Odoo API key for ``email`` against the configured
+        infrastructure.
+
+        ``odoo_login`` is the login string Odoo authenticates as. May
+        differ from ``email`` (e.g. the built-in ``admin`` user has
+        ``login = "admin"`` but a non-matching email). When ``None``,
+        ORC defaults to ``email`` server-side - kept as default for
+        callers that don't need to disambiguate.
+        """
         cfg = self._config()
+        body = {
+            "infrastructure_id": cfg["infra_id"],
+            "api_key": api_key,
+        }
+        if odoo_login is not None:
+            body["odoo_login"] = odoo_login
         self._request(
             "POST",
             "/api/auth/setup-key",
             acting_user=email,
-            json_body={
-                "infrastructure_id": cfg["infra_id"],
-                "api_key": api_key,
-                "access_level": access_level,
-            },
+            json_body=body,
         )
 
     @api.model
-    def deprovision_user(self, user_id):
-        self._request("DELETE", "/api/admin/users/%s" % user_id)
+    def revoke_infra_access(self, email):
+        """Revoke this user's access on THIS Odoo instance only.
+
+        Deletes the user's ``user_odoo_keys`` row for the configured
+        ``orc.infrastructure_id`` and removes the matching
+        ``infrastructure.member`` engine relation. Leaves the user's
+        organization membership and historical task rooms intact -
+        full offboarding is a dashboard action.
+        """
+        cfg = self._config()
+        self._request(
+            "DELETE",
+            "/api/auth/setup-key?infrastructure_id=%s" % cfg["infra_id"],
+            acting_user=email,
+        )
 
     @api.model
     def mint_sso_nonce(self, email):
