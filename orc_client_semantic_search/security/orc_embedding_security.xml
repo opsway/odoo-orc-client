@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        The orc.embedding* models hold the search index. Per the
+        README "Permission model" section, none of these rows leak
+        useful information on their own (refs are the only thing
+        ``semantic_search`` returns; the blob field is raw float
+        bytes), but we still keep them invisible to portal users
+        and limited to base.group_system + the technical user
+        group for direct admin access.
+
+        No record rules — the rows are global, scoped per-Odoo-
+        instance. Multi-company concerns are out of scope for v1.
+    -->
+</odoo>
