@@ -11,51 +11,27 @@ Depends on `orc_client_provisioning`. Adds an in-Odoo entry point to ORC chats:
   task as an iframe pointing at `/dashboard/tasks/{room_id}?embed=1`,
   signed in via a one-time SSO nonce minted server-to-server.
 
-## ⚠️ Embedded chat dock — known limitation (2026-05-07)
+## Embedded chat dock — how the iframe is authenticated
 
-The iframe dock is **not viable as the primary experience** for two
-independent reasons surfaced during local testing:
+Click on a task row → the addon mints a one-time SSO nonce on the
+ORC server, the dock JS submits a hidden form `POST /auth/sso?nonce=…`
+targeting the iframe's name attribute, ORC consumes the nonce and
+sets an iron-session cookie inside the iframe, the iframe follows
+the redirect to `/dashboard/tasks/<room_id>?embed=1` already
+authenticated.
 
-### 1. UI was not designed for a small embedded panel
+The cookie is issued with `SameSite=None; Secure; Partitioned`
+(CHIPS) so the browser will store it in a cross-site iframe
+context. That requires HTTPS — local-HTTP dev installs of ORC
+(`ORC_INSECURE_COOKIES=1`) fall back to `SameSite=Lax`, and the
+embedded dock won't work in that mode. Use the popover's
+"Open in app" link instead during local dev.
 
-ORC's `/dashboard/tasks/[id]` page renders the full desktop layout —
-left sidebar, top bar, multi-column composer. There is no minimized /
-compact layout for a 360×500 dock window. Any usable embed would
-need an ORC-side `?embed=compact` view that strips chrome to just
-the message stream + composer.
-
-### 2. Cross-site cookies blocked in the iframe
-
-ORC's session cookie is currently `SameSite=Lax`, which browsers
-refuse to set in a cross-site iframe context. Verified locally —
-the cookie is silently dropped, the embed page redirects to ORC's
-login form, the user sees a login screen instead of their chat.
-
-Fixing this needs the ORC server to:
-
-- set the session cookie as `SameSite=None; Secure; Partitioned`
-  (CHIPS) so it's allowed in a third-party iframe without being
-  reusable across embedder origins;
-- be served over HTTPS in every environment (including local dev),
-  since `Secure` cookies are rejected on plain `http://`;
-- add an explicit `frame-ancestors` CSP allow-listing the Odoo
-  origin, plus a CSRF token on every state-changing endpoint, since
-  `SameSite=None` removes the default CSRF protection the cookie
-  used to give for free.
-
-### Decision
-
-Defer the embedded dock until ORC ships an `?embed=compact` view.
-Cookie/CHIPS work is only worth doing once the embedded UI itself is
-desirable.
-
-In the meantime the popover + "Open in app" flow covers the same
-intent without the iframe — see `static/src/js/orc_task_list_popover.js`
-and `orc_systray_override.js`. The dock components
-(`orc_chat_dock.js`, `orc_chat_window.js`) and `/orc/tasks/open`
-controller are kept in the repo so we don't have to rebuild them
-when ORC's compact view lands; they just aren't reachable from the UI
-right now via task-row clicks unless we re-wire them.
+The full ORC-side rendering of `/dashboard/tasks/<id>?embed=1`
+still uses the desktop layout (sidebar + top bar + multi-column
+composer); a dedicated `?embed=compact` view that strips chrome
+for a 360×500 dock window is on the roadmap but not required —
+the existing layout is usable when the dock is sized larger.
 
 ## ORC-side dependencies
 
@@ -63,6 +39,10 @@ right now via task-row clicks unless we re-wire them.
 - `POST /api/tasks/create` creates a new room
 - `POST /api/addon/sso-exchange` mints the SSO nonce (with optional
   `return_to` and browser UA/IP forwarded as `X-Browser-*` headers)
-- For the deferred embed dock: `GET /dashboard/tasks/{id}?embed=compact`
-  (planned), `frame-ancestors` allowlist on the embed page, and the
-  CHIPS/HTTPS work above.
+- `POST /auth/sso` consumes the nonce and sets the iframe-storable
+  `orc_session` cookie (CHIPS-partitioned, SameSite=None+Secure)
+- `GET /dashboard/tasks/{id}?embed=1` is the iframe's destination —
+  authenticated by the cookie set in the previous step
+- A `?embed=compact` variant that strips chrome for tight dock
+  windows is on the roadmap but optional; the existing layout
+  works for full-height embeds.
