@@ -1,32 +1,23 @@
 odoo.define('orc_client_provisioning.OrcSystray', function (require) {
 "use strict";
 
+var session = require('web.session');
 var SystrayMenu = require('web.SystrayMenu');
 var Widget = require('web.Widget');
-var session = require('web.session');
 
 /**
- * ORC systray icon. Visible iff the current user has orc_enabled=True
- * (primed server-side via ir.http.session_info override).
+ * ORC systray icon. Clicking opens /orc/sso/start in a new tab; the
+ * server mints a one-time nonce and auto-submits a sign-in form to ORC.
  *
- * Clicking opens /orc/sso/start in a new tab; the server mints a
- * one-time nonce and returns an auto-submitting form that signs the
- * user in to ORC with no second password prompt.
+ * Registered only for users with session.orc_enabled (primed by an
+ * ir.http._get_session_info override) — the push is gated so non-ORC
+ * users never instantiate the widget.
  */
 var OrcSystray = Widget.extend({
+    name: 'orc_systray',
     template: 'orc_client_provisioning.OrcSystray',
-
-    /**
-     * Hide the widget for users who aren't ORC-enabled. The systray
-     * manager has no native skip-me hook, so we mount empty.
-     */
-    start: function () {
-        if (!session.orc_enabled) {
-            this.$el.remove();
-            return this._super.apply(this, arguments);
-        }
-        this.$('.o-orc-systray-btn').on('click', this._onClick.bind(this));
-        return this._super.apply(this, arguments);
+    events: {
+        'click .o-orc-systray-btn': '_onClick',
     },
 
     _onClick: function (ev) {
@@ -37,7 +28,10 @@ var OrcSystray = Widget.extend({
 
 // 100 keeps us left of the user menu (sequence 0).
 OrcSystray.prototype.sequence = 100;
-SystrayMenu.Items.push(OrcSystray);
+
+if (session.orc_enabled) {
+    SystrayMenu.Items.push(OrcSystray);
+}
 
 return OrcSystray;
 });
