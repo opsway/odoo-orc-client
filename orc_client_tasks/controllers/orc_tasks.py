@@ -126,9 +126,15 @@ class OrcTasksController(http.Controller):
                 status=400,
             )
 
-        # quote() with safe='' so `:` and `!` get percent-encoded too.
-        # ORC's /dashboard/tasks/[id] page decodes via decodeURIComponent.
-        return_to = f"/dashboard/tasks/{quote(room_id, safe='')}?embed=1"
+        # Built by the service so the `?embed=1&theme=<value>` shape
+        # stays in one place and the helper-tests cover it.
+        # `theme` comes from the `orc_client_tasks.embed_theme`
+        # ir.config_parameter (admin-set, defaults to dark).
+        return_to = (
+            request.env["orc.client"]
+            .sudo()
+            ._build_embed_return_to(room_id)
+        )
         # Forward browser context so ORC's redeem check binds on the
         # browser that will actually consume the nonce — same as Phase-1
         # /orc/sso/start. Without these the redeem false-rejects and the

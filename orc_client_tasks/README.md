@@ -35,6 +35,20 @@ composer); a dedicated `?embed=compact` view that strips chrome
 for a 360×500 dock window is on the roadmap but not required —
 the existing layout is usable when the dock is sized larger.
 
+## Configuration
+
+System parameters under **Settings → Technical → Parameters →
+System Parameters**:
+
+| Key | Values | Default | Effect |
+|---|---|---|---|
+| `orc_client_tasks.embed_theme` | `dark` / `light` | `dark` | Theme applied to the embedded chat iframe. The orc-app reads `?theme=` from the iframe URL and toggles its dark class before paint, so the embed matches the host Odoo's theme without a runtime postMessage handshake. Anything other than `dark` / `light` falls back to the default. |
+
+Static parameter for now — set it once per Odoo install. A
+follow-up could read the host theme dynamically and re-emit
+postMessage when the user toggles, but the static knob covers
+99% of cases (each tenant runs Odoo in one consistent theme).
+
 ## ORC-side dependencies
 
 - `POST /api/me/tasks` returns the caller's tasks

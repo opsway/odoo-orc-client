@@ -1,6 +1,6 @@
 {
     "name": "ORC Client — Tasks",
-    "version": "18.0.0.5.0",
+    "version": "18.0.0.6.0",
     "summary": (
         "In-Odoo chat dock for ORC: task-list systray + Discuss-style"
         " foldable windows embedding ORC chat via SSO."
