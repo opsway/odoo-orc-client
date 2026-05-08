@@ -12,13 +12,6 @@ import { computeIsUnread } from "./orc_chat_service";
  * means each open window holds one SSE connection to ORC — acceptable
  * at N≤3 (the dock's cap); Phase 2b replaces with a shared SSE via
  * the React SDK extraction.
- *
- * NOTE (2026-05-07): the embedded dock is shelved — see README's
- * "Embedded chat dock — known limitation" section for the cookie
- * (SameSite=Lax) and ORC-UI-not-built-for-compact-embed reasons.
- * This component is kept so we don't have to rebuild it when ORC
- * ships an ?embed=compact view; clicking a task currently uses the
- * popover + "Open in app" flow instead.
  */
 export class OrcChatWindow extends Component {
     static template = "orc_client_tasks.OrcChatWindow";
