@@ -216,5 +216,21 @@ class OrcClientConfig(models.AbstractModel):
 
     @api.model
     def list_users(self) -> dict:
-        """Reconciliation — returns {users, infrastructures} for this org."""
-        return self._request("GET", "/api/admin/users")
+        """Reconciliation — returns users with active access on THIS infra.
+
+        Backed by ``/api/addon/infrastructure-users``. The endpoint
+        derives the infra from the addon's org-identity Bearer (the
+        token is pinned to one ``infrastructure_id``) and filters to
+        users who currently hold a key on that infra. A user revoked
+        from this Odoo via ``revoke_infra_access`` keeps their org
+        membership but loses the per-infra key, so they will NOT
+        appear in this response — which is what the reconcile loop
+        in ``res.users._cron_orc_reconcile`` relies on for both
+        directions of drift detection.
+
+        Response shape: ``{ok, users: [{email, name, role}]}``. The
+        legacy ``infrastructures`` field on the org-scoped endpoint
+        is intentionally not surfaced here; reconcile only needs the
+        per-infra user set.
+        """
+        return self._request("GET", "/api/addon/infrastructure-users")

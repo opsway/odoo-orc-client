@@ -127,6 +127,59 @@ class TestReconcileDrift(TransactionCase):
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("deprovisioned", self.user.orc_last_sync_message or "")
 
+    def test_reconcile_already_revoked_disabled_user_does_not_rerevoke(self):
+        """Per-infra contract: a locally-disabled user whose key on
+        this infra was already revoked must NOT appear in the remote
+        response, so reconcile does not call revoke again on every
+        cron tick (the org-scoped pre-1.9.0 endpoint kept returning
+        them by org membership and produced revoke churn)."""
+        with patch.multiple(
+            self.env["orc.client"],
+            revoke_infra_access=lambda **kw: None,
+        ):
+            self.user.orc_enabled = False
+
+        calls = {"revoke_count": 0}
+
+        def fake_revoke(**kw):
+            calls["revoke_count"] += 1
+
+        with patch.multiple(
+            self.env["orc.client"],
+            list_users=lambda *a, **kw: {"users": []},
+            revoke_infra_access=fake_revoke,
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.assertEqual(calls["revoke_count"], 0)
+
+    def test_reconcile_org_member_without_infra_key_reprovisions(self):
+        """Per-infra contract: a user who's still in the org but
+        lost their key on this infra must NOT appear in list_users()
+        (the endpoint filters by per-infra key ownership), so the
+        Direction-A branch re-provisions instead of stamping in sync.
+        Pre-1.9.0 the org-scoped endpoint returned them and reconcile
+        wrongly marked them ok, leaving the user unable to access this
+        Odoo until an admin toggled them manually."""
+        calls = {"provision": 0}
+
+        def fake_provision(**kw):
+            calls["provision"] += 1
+            return "orc-uid-1"
+
+        with patch.multiple(
+            self.env["orc.client"],
+            list_users=lambda *a, **kw: {"users": []},
+            provision_user=fake_provision,
+            push_odoo_key=lambda **kw: None,
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.assertEqual(calls["provision"], 1)
+        self.user.invalidate_recordset()
+        self.assertEqual(self.user.orc_last_sync_status, "ok")
+        self.assertIn("re-provisioned", self.user.orc_last_sync_message or "")
+
     def test_reconcile_http_error_marks_user_error(self):
         """Network/auth blip on list_users → every orc_enabled user
         gets a red badge with the error message."""
