@@ -3,12 +3,15 @@
  * where possible — the dock should follow the user's theme instead
  * of pinning to a fixed palette. */
 
-$orc-chat-window-width: 360px;
-$orc-chat-window-height: 520px;
+// The dock isn't a tiny chat — it surfaces tables, files, and the
+// full agent workspace, so it needs real estate. 75% of the viewport
+// gives room for content while leaving the Odoo navbar/sidebar
+// peeking through so the user knows where they came back to.
+$orc-chat-window-width: 75vw;
+$orc-chat-window-height: 75vh;
 $orc-chat-header-height: 38px;
 $orc-chat-window-gap: 10px;
-$orc-chat-dock-bottom: 10px;
-$orc-chat-dock-right: 16px;
+$orc-chat-header-bg: #66B57D;
 
 /* ----------------------------------------------------- systray (green icon) */
 
@@ -126,12 +129,13 @@ $orc-chat-dock-right: 16px;
 
 .o_orc_chat_dock {
     position: fixed;
-    right: $orc-chat-dock-right;
-    bottom: $orc-chat-dock-bottom;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     z-index: 1040;
     display: flex;
     flex-direction: row;
-    align-items: flex-end;
+    align-items: center;
     gap: $orc-chat-window-gap;
     pointer-events: none; /* children re-enable */
 }
@@ -145,9 +149,7 @@ $orc-chat-dock-right: 16px;
     background: var(--bs-body-bg, #fff);
     color: var(--bs-body-color, #111);
     border: 1px solid var(--bs-border-color, #e5e7eb);
-    border-bottom: 0;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
+    border-radius: 8px;
     box-shadow: 0 12px 28px rgba(0, 0, 0, .18);
     overflow: hidden;
     transition: height .12s ease;
@@ -162,7 +164,7 @@ $orc-chat-dock-right: 16px;
         display: flex;
         align-items: center;
         padding: 0 10px;
-        background: var(--bs-primary, #2563eb);
+        background: $orc-chat-header-bg;
         color: #fff;
         font-weight: 500;
         font-size: .88rem;
