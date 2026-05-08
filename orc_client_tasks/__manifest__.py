@@ -1,7 +1,10 @@
 {
     "name": "ORC Client — Tasks",
     "version": "18.0.0.2.0",
-    "summary": "In-Odoo chat dock for ORC: task-list systray + Discuss-style foldable windows embedding ORC chat via SSO.",
+    "summary": (
+        "In-Odoo chat dock for ORC: task-list systray + Discuss-style"
+        " foldable windows embedding ORC chat via SSO."
+    ),
     "description": """
 ORC Client — Tasks (Phase 2a)
 =============================

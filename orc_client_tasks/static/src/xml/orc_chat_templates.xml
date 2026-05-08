@@ -10,7 +10,7 @@
             <button type="button"
                     class="btn btn-link o-orc-systray-btn"
                     t-on-click="onToggleDropdown"
-                    title="ORC chats">
+                    title="AI Workplace">
                 <img src="/orc_client_provisioning/static/description/icon.svg"
                      class="o-orc-systray-icon" alt="ORC"/>
                 <span t-if="badgeLabel"
@@ -28,7 +28,7 @@
     <t t-name="orc_client_tasks.OrcTaskListPopover">
         <div class="o_orc_chat_popover">
             <div class="o_orc_chat_popover_header">
-                <span class="o_orc_chat_popover_title">My ORC chats</span>
+                <span class="o_orc_chat_popover_title">AI Workplace</span>
                 <div class="o_orc_chat_popover_actions">
                     <button type="button"
                             class="btn btn-sm btn-link"
@@ -65,7 +65,7 @@
 
             <div class="o_orc_chat_popover_list">
                 <t t-if="!tasks.length">
-                    <p class="text-muted small p-3 mb-0">No ORC chats yet.</p>
+                    <p class="text-muted small p-3 mb-0">No chats yet.</p>
                 </t>
                 <t t-foreach="tasks" t-as="task" t-key="task.room_id">
                     <button type="button"
