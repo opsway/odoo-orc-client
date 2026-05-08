@@ -12,6 +12,12 @@ _logger = logging.getLogger(__name__)
 # admin calls; a hung ORC must not freeze an Odoo request worker.
 DEFAULT_TIMEOUT = 30
 
+# Stable User-Agent so Cloudflare / WAF rules at the ORC edge can
+# whitelist this client without relying on egress-IP allowlisting.
+# Keep the literal string ``OpsWayOrcClient`` - operators key bypass
+# rules off it.
+USER_AGENT = "OpsWayOrcClient/13 (orc_client_provisioning)"
+
 
 class OrcClientConfig(models.AbstractModel):
     """Stateless wrapper around ir.config_parameter + requests.
@@ -53,6 +59,7 @@ class OrcClientConfig(models.AbstractModel):
         headers = {
             "Authorization": "Bearer %s" % cfg["token"],
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         }
         if acting_user:
             headers["X-Acting-User"] = acting_user
