@@ -55,7 +55,14 @@ class OrcClientTasksExt(models.AbstractModel):
         )
 
     @api.model
-    def mint_sso_nonce(self, *, email: str, return_to: str | None = None) -> dict:
+    def mint_sso_nonce(
+        self,
+        *,
+        email: str,
+        return_to: str | None = None,
+        browser_user_agent: str | None = None,
+        browser_ip: str | None = None,
+    ) -> dict:
         """Phase 2a override that supports the optional return_to.
 
         Phase 1's implementation didn't pass return_to, so a nonce
@@ -64,6 +71,10 @@ class OrcClientTasksExt(models.AbstractModel):
         ``/dashboard/tasks/{room_id}?embed=1`` for the iframe body,
         which is what return_to carries.
 
+        Browser context (UA + IP) is forwarded via X-Browser-* headers
+        the same way Phase 1 does; without it the redeem check would
+        false-reject when the user actually clicks through to ORC.
+
         Server re-validates the prefix on the exchange and consume
         paths (/dashboard/ only). Passing an invalid path surfaces as
         a UserError raised by ``_request`` (ORC returns 400).
@@ -71,8 +82,13 @@ class OrcClientTasksExt(models.AbstractModel):
         body: dict = {"email": email}
         if return_to:
             body["return_to"] = return_to
+        extra = {
+            "X-Browser-User-Agent": browser_user_agent,
+            "X-Browser-IP": browser_ip,
+        }
         return self._request(
             "POST",
             "/api/addon/sso-exchange",
             json_body=body,
+            extra_headers={k: v for k, v in extra.items() if v},
         )

@@ -29,12 +29,21 @@
         <div class="o_orc_chat_popover">
             <div class="o_orc_chat_popover_header">
                 <span class="o_orc_chat_popover_title">My ORC chats</span>
-                <button type="button"
-                        class="btn btn-sm btn-link o_orc_chat_compose_toggle"
-                        t-on-click="onClickCompose"
-                        t-att-title="ui.composerOpen ? 'Cancel' : 'New chat'">
-                    <i t-att-class="ui.composerOpen ? 'fa fa-times' : 'fa fa-plus'"/>
-                </button>
+                <div class="o_orc_chat_popover_actions">
+                    <button type="button"
+                            class="btn btn-sm btn-link"
+                            t-on-click="onClickOpenInOrc"
+                            title="Open in ORC">
+                        <i class="fa fa-external-link"/>
+                        <span class="ms-1">Open in app</span>
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-link o_orc_chat_compose_toggle"
+                            t-on-click="onClickCompose"
+                            t-att-title="ui.composerOpen ? 'Cancel' : 'New chat'">
+                        <i t-att-class="ui.composerOpen ? 'fa fa-times' : 'fa fa-plus'"/>
+                    </button>
+                </div>
             </div>
 
             <div t-if="ui.composerOpen" class="o_orc_chat_composer">

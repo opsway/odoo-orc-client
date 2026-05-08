@@ -1,29 +1,48 @@
-# orc_client_tasks (Phase 2 — stub)
+# orc_client_tasks (Phase 2a)
 
-Not yet implemented. `installable=False` until Phase 1 is live in
-production and Phase 2 design is ratified against real usage data.
+Depends on `orc_client_provisioning`. Adds an in-Odoo entry point to ORC chats:
 
-## Planned surface
+- Systray icon (overrides Phase-1's icon) shows a popover listing the
+  user's ORC tasks (live count of unread, inline new-task composer).
+- "Open in app" button on the popover header opens the full ORC
+  dashboard in a new top-level tab via `/orc/sso/start` (the Phase-1
+  SSO flow).
+- A foldable Discuss-style chat dock at the bottom-right embeds each
+  task as an iframe pointing at `/dashboard/tasks/{room_id}?embed=1`,
+  signed in via a one-time SSO nonce minted server-to-server.
 
-- `orc.ticket` — local mirror of ORC rooms (room_id, task_id, subject,
-  status, unread_count, last_message_at, aup_version, aup_accepted_at,
-  related_model, related_res_id, source)
-- `orc.aup.acceptance` — per-user × per-version; per-ticket snapshot
-- Systray Owl dropdown with unread badge + ticket list
-- `Create ORC Ticket` Owl dialog (shared by systray, action menu,
-  exception modal)
-- Action-menu entry on every form view (pre-fills related record)
-- Client-side error-modal override, opt-in per user, scrubs secrets
-  before attaching traceback
-- Sync cron: `GET /api/me/tasks?updated_since=...` every 5 min
+## Embedded chat dock — how the iframe is authenticated
+
+Click on a task row → the addon mints a one-time SSO nonce on the
+ORC server, the dock JS submits a hidden form `POST /auth/sso?nonce=…`
+targeting the iframe's name attribute, ORC consumes the nonce and
+sets an iron-session cookie inside the iframe, the iframe follows
+the redirect to `/dashboard/tasks/<room_id>?embed=1` already
+authenticated.
+
+The cookie is issued with `SameSite=None; Secure; Partitioned`
+(CHIPS) so the browser will store it in a cross-site iframe
+context. That requires HTTPS — local-HTTP dev installs of ORC
+(`ORC_INSECURE_COOKIES=1`) fall back to `SameSite=Lax`, and the
+embedded dock won't work in that mode. Use the popover's
+"Open in app" link instead during local dev.
+
+The full ORC-side rendering of `/dashboard/tasks/<id>?embed=1`
+still uses the desktop layout (sidebar + top bar + multi-column
+composer); a dedicated `?embed=compact` view that strips chrome
+for a 360×500 dock window is on the roadmap but not required —
+the existing layout is usable when the dock is sized larger.
 
 ## ORC-side dependencies
 
-- `compliance_acks.source` / `ip` / `user_agent` columns
-- `POST /api/tasks/create` accepting `{aup_acceptance: {version, ...}}`
-- `GET /api/me/tasks` accepting `?updated_since=<iso>`
-- Service bot skipping AUP prompt when `compliance_acks` row exists
-  for the current version
-
-Zero new ORC endpoints — all extensions on the existing thin-client
-surface.
+- `POST /api/me/tasks` returns the caller's tasks
+- `POST /api/tasks/create` creates a new room
+- `POST /api/addon/sso-exchange` mints the SSO nonce (with optional
+  `return_to` and browser UA/IP forwarded as `X-Browser-*` headers)
+- `POST /auth/sso` consumes the nonce and sets the iframe-storable
+  `orc_session` cookie (CHIPS-partitioned, SameSite=None+Secure)
+- `GET /dashboard/tasks/{id}?embed=1` is the iframe's destination —
+  authenticated by the cookie set in the previous step
+- A `?embed=compact` variant that strips chrome for tight dock
+  windows is on the roadmap but optional; the existing layout
+  works for full-height embeds.

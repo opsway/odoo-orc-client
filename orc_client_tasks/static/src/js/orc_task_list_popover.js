@@ -85,6 +85,13 @@ export class OrcTaskListPopover extends Component {
         if (this.ui.composerOpen) this.ui.composerText = "";
     }
 
+    onClickOpenInOrc() {
+        // Phase-1 fallback: jump to the full ORC dashboard in a new tab,
+        // signed in via the same SSO start endpoint orc_client_provisioning ships.
+        window.open("/orc/sso/start", "_blank", "noopener");
+        if (this.props.onPicked) this.props.onPicked();
+    }
+
     async onSubmitCompose() {
         const text = this.ui.composerText.trim();
         if (!text || this.ui.composerBusy) return;

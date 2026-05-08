@@ -129,11 +129,23 @@ class OrcTasksController(http.Controller):
         # quote() with safe='' so `:` and `!` get percent-encoded too.
         # ORC's /dashboard/tasks/[id] page decodes via decodeURIComponent.
         return_to = f"/dashboard/tasks/{quote(room_id, safe='')}?embed=1"
+        # Forward browser context so ORC's redeem check binds on the
+        # browser that will actually consume the nonce — same as Phase-1
+        # /orc/sso/start. Without these the redeem false-rejects and the
+        # iframe lands on the ORC login screen instead of the embed.
+        httpreq = request.httprequest
+        browser_ua = httpreq.user_agent.string if httpreq.user_agent else None
+        browser_ip = httpreq.remote_addr or None
         try:
             data = (
                 request.env["orc.client"]
                 .sudo()
-                .mint_sso_nonce(email=user.login, return_to=return_to)
+                .mint_sso_nonce(
+                    email=user.login,
+                    return_to=return_to,
+                    browser_user_agent=browser_ua,
+                    browser_ip=browser_ip,
+                )
             )
         except UserError as exc:
             _logger.info("ORC mint_sso_nonce failed: %s", exc)
