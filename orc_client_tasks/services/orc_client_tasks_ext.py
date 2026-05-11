@@ -1,4 +1,14 @@
+from urllib.parse import quote
+
 from odoo import api, models
+
+
+# `dark` / `light` is the contract; anything else gets coerced to
+# the default at read time so a fat-fingered admin doesn't silently
+# break the embed by forwarding a garbage `?theme=` value.
+EMBED_THEME_PARAM = "orc_client_tasks.embed_theme"
+EMBED_THEME_DEFAULT = "dark"
+EMBED_THEME_VALID = ("dark", "light")
 
 
 class OrcClientTasksExt(models.AbstractModel):
@@ -117,3 +127,27 @@ class OrcClientTasksExt(models.AbstractModel):
             json_body=body,
             extra_headers={k: v for k, v in extra.items() if v},
         )
+
+    @api.model
+    def _build_embed_return_to(self, room_id: str) -> str:
+        """Build the iframe `return_to` for a given task room.
+
+        Reads the `orc_client_tasks.embed_theme` config parameter so
+        the host Odoo's admin can force `dark` or `light` on the
+        embedded chat. The orc-app side picks up `?theme=` and
+        toggles the dark class before paint — see
+        opsway/odoo-agent-gateway#85.
+
+        The percent-encoding of the room id matches what the
+        existing controller emits (`quote(room_id, safe='')`) so
+        the iframe's URL stays a single canonical shape.
+        """
+        encoded = quote(room_id, safe="")
+        theme = (
+            self.env["ir.config_parameter"]
+            .sudo()
+            .get_param(EMBED_THEME_PARAM, EMBED_THEME_DEFAULT)
+        )
+        if theme not in EMBED_THEME_VALID:
+            theme = EMBED_THEME_DEFAULT
+        return f"/dashboard/tasks/{encoded}?embed=1&theme={theme}"
