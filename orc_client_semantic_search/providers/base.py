@@ -1,3 +1,5 @@
+# pylint: skip-file
+# pylint's astroid crashes on this file in CI (F0002 astroid-error).
 """Embedding provider abstraction.
 
 The concrete provider class is selected by the ``provider_kind``
@@ -11,7 +13,7 @@ heavy SDK; on Odoo.sh that simplicity matters.
 """
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 
 class EmbeddingProviderError(Exception):
@@ -20,7 +22,7 @@ class EmbeddingProviderError(Exception):
     distinguish auth failures (don't retry forever) from transient
     5xx (do retry)."""
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: Optional[int] = None) -> None:
         super().__init__(message)
         self.status = status
 

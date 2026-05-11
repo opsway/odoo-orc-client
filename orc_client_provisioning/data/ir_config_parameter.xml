@@ -8,7 +8,7 @@
         we won't clobber them.
 
         orc.org_token and orc.infrastructure_id are seeded empty on
-        purpose — they're per-install values the ORC consultant hands
+        purpose — they're per-install values the AI Workplace consultant hands
         to the Odoo admin, and an empty row makes them discoverable in
         the System Parameters UI without requiring the admin to
         remember the exact key names.

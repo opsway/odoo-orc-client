@@ -3,7 +3,7 @@ from odoo import fields, models
 
 class OrcEmbeddingQueue(models.Model):
     _name = "orc.embedding.queue"
-    _description = "ORC semantic search — pending re-index markers"
+    _description = "AI Workplace semantic search — pending re-index markers"
     _order = "enqueued_at, id"
 
     model = fields.Char(string="Odoo model", required=True, index=True)

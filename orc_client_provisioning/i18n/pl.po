@@ -1,0 +1,263 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* orc_client_provisioning
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 18.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-05-11 11:49+0000\n"
+"PO-Revision-Date: 2026-05-11 11:49+0000\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: pl\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: \n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__action
+msgid "Action"
+msgstr "Akcja"
+
+#. module: orc_client_provisioning
+#: model:ir.actions.act_window,name:orc_client_provisioning.action_orc_audit_log
+#: model:ir.ui.menu,name:orc_client_provisioning.menu_orc_audit_log
+msgid "Audit log"
+msgstr "Dziennik audytu"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_enabled
+msgid "AI Workplace access"
+msgstr "Dostęp do AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:res.groups,comment:orc_client_provisioning.group_orc_manager
+msgid ""
+"Can enable / disable AI Workplace access for users and inspect the"
+" audit log."
+msgstr ""
+"Może włączać / wyłączać dostęp do AI Workplace dla użytkowników i "
+"przeglądać dziennik audytu."
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__create_uid
+msgid "Created by"
+msgstr "Utworzone przez"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__create_date
+msgid "Created on"
+msgstr "Utworzone"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__deprovision
+msgid "Deprovision"
+msgstr "Wyrejestruj"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__display_name
+msgid "Display Name"
+msgstr "Nazwa wyświetlana"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__status__drift
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__res_users__orc_last_sync_status__drift
+msgid "Drift"
+msgstr "Rozbieżność"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__error
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__status__error
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__res_users__orc_last_sync_status__error
+msgid "Error"
+msgstr "Błąd"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/models/res_users.py:0
+msgid "Failed to generate Odoo API key for %(login)s: %(err)s"
+msgstr "Nie udało się wygenerować klucza API Odoo dla %(login)s: %(err)s"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/services/orc_client.py:0
+msgid "Failed to reach AI Workplace at %(url)s: %(err)s"
+msgstr "Nie udało się połączyć z AI Workplace pod adresem %(url)s: %(err)s"
+
+#. module: orc_client_provisioning
+#: model:ir.model,name:orc_client_provisioning.model_ir_http
+msgid "HTTP Routing"
+msgstr "Routing HTTP"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__id
+msgid "ID"
+msgstr "ID"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_is_manager
+msgid "Is AI Workplace manager"
+msgstr "Jest menadżerem AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_last_rotation_at
+msgid "Key rotated"
+msgstr "Klucz zmieniony"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__write_uid
+msgid "Last Updated by"
+msgstr "Ostatnio zaktualizowano przez"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__write_date
+msgid "Last Updated on"
+msgstr "Ostatnia aktualizacja"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_last_sync_message
+msgid "Last sync message"
+msgstr "Komunikat ostatniej synchronizacji"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_last_sync_status
+msgid "Last sync status"
+msgstr "Status ostatniej synchronizacji"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_last_sync_at
+msgid "Last synced at"
+msgstr "Ostatnia synchronizacja"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_api_key_id
+msgid "Managed API key"
+msgstr "Zarządzany klucz API"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__status__ok
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__res_users__orc_last_sync_status__ok
+msgid "OK"
+msgstr "OK"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/services/orc_client.py:0
+msgid "AI Workplace %(method)s %(path)s returned %(code)s: %(err)s"
+msgstr "AI Workplace %(method)s %(path)s zwróciło %(code)s: %(err)s"
+
+#. module: orc_client_provisioning
+#: model:ir.model,name:orc_client_provisioning.model_orc_client
+msgid "AI Workplace HTTP client (stateless)"
+msgstr "Klient HTTP AI Workplace (bezstanowy)"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/services/orc_client.py:0
+msgid ""
+"AI Workplace is not configured. Set orc.endpoint_url, orc.org_token and "
+"orc.infrastructure_id in System Parameters before enabling users."
+msgstr ""
+"AI Workplace nie jest skonfigurowany. Ustaw orc.endpoint_url, orc.org_token oraz "
+"orc.infrastructure_id w Parametrach systemu przed włączeniem użytkowników."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/services/orc_client.py:0
+msgid "AI Workplace provisioning returned no user_id"
+msgstr "Rejestracja AI Workplace nie zwróciła user_id"
+
+#. module: orc_client_provisioning
+#: model:ir.actions.server,name:orc_client_provisioning.ir_cron_orc_maintenance_ir_actions_server
+msgid "AI Workplace: daily maintenance"
+msgstr "AI Workplace: codzienna konserwacja"
+
+#. module: orc_client_provisioning
+#: model:ir.actions.server,name:orc_client_provisioning.ir_cron_orc_sync_ir_actions_server
+msgid "AI Workplace: sync roles and reconcile"
+msgstr "AI Workplace: synchronizuj role i uzgadniaj"
+
+#. module: orc_client_provisioning
+#: model:ir.ui.menu,name:orc_client_provisioning.menu_orc_root
+#: model_terms:ir.ui.view,arch_db:orc_client_provisioning.view_users_form_orc
+msgid "AI Workplace"
+msgstr "AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:res.groups,name:orc_client_provisioning.group_orc_manager
+msgid "AI Workplace Manager"
+msgstr "Menadżer AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:ir.model,name:orc_client_provisioning.model_orc_audit_log
+msgid "AI Workplace provisioning audit log"
+msgstr "Dziennik audytu rejestracji AI Workplace"
+
+#. module: orc_client_provisioning
+#. odoo-javascript
+#: code:addons/orc_client_provisioning/static/src/js/orc_systray.xml:0
+msgid "Open AI Workplace"
+msgstr "Otwórz AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__provision
+msgid "Provision"
+msgstr "Zarejestruj"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_provisioned_at
+msgid "Provisioned"
+msgstr "Zarejestrowano"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__reconcile
+msgid "Reconcile"
+msgstr "Uzgodnij"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__rotate
+msgid "Rotate"
+msgstr "Zmień"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__sso
+msgid "SSO handoff"
+msgstr "Przekazanie SSO"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__status
+msgid "Status"
+msgstr "Status"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,help:orc_client_provisioning.field_res_users__orc_is_manager
+msgid ""
+"True when the user belongs to the AI Workplace manager group "
+"(implied by base.group_system by default)."
+msgstr ""
+"Prawda, gdy użytkownik należy do grupy menadżerów AI Workplace "
+"(implikowane domyślnie przez base.group_system)."
+
+#. module: orc_client_provisioning
+#: model:ir.model,name:orc_client_provisioning.model_res_users
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_orc_audit_log__user_id
+msgid "User"
+msgstr "Użytkownik"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_user_id
+msgid "User ID"
+msgstr "ID użytkownika"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,help:orc_client_provisioning.field_res_users__orc_enabled
+msgid ""
+"When enabled, the user is provisioned into the AI Workplace, gets "
+"an auto-managed Odoo API key pushed to it, and sees the systray icon to open"
+" their AI Workplace conversations."
+msgstr ""
+"Po włączeniu użytkownik zostaje zarejestrowany w AI Workplace, "
+"otrzymuje automatycznie zarządzany klucz API Odoo i widzi ikonę w systrayu "
+"pozwalającą otworzyć jego rozmowy w AI Workplace."

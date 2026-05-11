@@ -6,7 +6,7 @@ import { _t } from "@web/core/l10n/translation";
 import { session } from "@web/session";
 
 /**
- * Shared state + actions for the ORC chat dock.
+ * Shared state + actions for the AI Workplace chat dock.
  *
  * Owns the task list (polled from /orc/tasks/list), the set of open
  * chat windows, and a last-viewed timestamp per room (persisted to
@@ -177,7 +177,7 @@ const orcChatService = {
             return state.tasks.reduce((n, t) => (isUnread(t) ? n + 1 : n), 0);
         }
 
-        // Ask the Odoo backend to mint a one-time ORC SSO nonce for
+        // Ask the Odoo backend to mint a one-time AI Workplace SSO nonce for
         // this task. Returns {url, nonce} — the caller (chat window)
         // form-POSTs these into its iframe.
         async function openHandshake(roomId) {
@@ -189,7 +189,7 @@ const orcChatService = {
             });
             const data = await res.json();
             if (!data.ok) {
-                notification.add(data.error || _t("Failed to open ORC chat"), {
+                notification.add(data.error || _t("Failed to open AI Workplace chat"), {
                     type: "warning",
                 });
                 throw new Error(data.error || "handshake failed");
@@ -210,7 +210,7 @@ const orcChatService = {
             });
             const data = await res.json();
             if (!data.ok || !data.room_id) {
-                notification.add(data.error || _t("Failed to create ORC task"), {
+                notification.add(data.error || _t("Failed to create AI Workplace task"), {
                     type: "danger",
                 });
                 throw new Error(data.error || "create failed");

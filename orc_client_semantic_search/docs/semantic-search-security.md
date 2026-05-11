@@ -1,6 +1,6 @@
 # Semantic search — security and visibility
 
-A business-user explainer for how the ORC assistant finds
+A business-user explainer for how the AI Workplace assistant finds
 information in the Odoo knowledge base, and why it can never
 show a user content they wouldn't be allowed to read — even when
 an article containing the answer exists.
@@ -52,7 +52,7 @@ The other two are invisible to her.
 sequenceDiagram
     autonumber
     actor Anna as Anna<br/>(Sales)
-    participant Assistant as ORC Assistant
+    participant Assistant as AI Workplace Assistant
     participant Search as Semantic<br/>search
     participant Odoo as Odoo<br/>(access rules)
 

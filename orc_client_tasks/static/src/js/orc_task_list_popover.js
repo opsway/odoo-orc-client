@@ -5,14 +5,14 @@ import { useService } from "@web/core/utils/hooks";
 import { computeIsUnread } from "./orc_chat_service";
 
 /**
- * List of the user's ORC tasks, grouped by status. Rendered inside
+ * List of the user's AI Workplace tasks, grouped by status. Rendered inside
  * the systray's dropdown. Clicking a row opens a chat window via
  * the shared orc_chat service.
  *
  * Composing a new task is one click: the "+" button creates an
  * empty room server-side and immediately opens a chat window on
  * it. The user types their first message inside the chat iframe's
- * composer — same place every follow-up message goes. The ORC
+ * composer — same place every follow-up message goes. The AI Workplace
  * server already supports the no-first-message creation path; see
  * `services/orc_client_tasks_ext.py::create_task`.
  *
@@ -86,7 +86,7 @@ export class OrcTaskListPopover extends Component {
     }
 
     onClickOpenInOrc() {
-        // Phase-1 fallback: jump to the full ORC dashboard in a new tab,
+        // Phase-1 fallback: jump to the full AI Workplace dashboard in a new tab,
         // signed in via the same SSO start endpoint orc_client_provisioning ships.
         window.open("/orc/sso/start", "_blank", "noopener");
         if (this.props.onPicked) this.props.onPicked();

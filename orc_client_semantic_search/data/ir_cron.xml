@@ -9,7 +9,7 @@
         different cadence than what the config exposes.
     -->
     <record id="ir_cron_orc_embedding_reindex" model="ir.cron">
-        <field name="name">ORC Semantic Search — reindex sweep</field>
+        <field name="name">AI Workplace Semantic Search — reindex sweep</field>
         <field name="model_id" ref="model_orc_embedding"/>
         <field name="state">code</field>
         <field name="code">model._cron_reindex_sweep()</field>

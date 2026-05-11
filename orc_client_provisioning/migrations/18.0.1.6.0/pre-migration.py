@@ -1,7 +1,7 @@
 """Drop the now-orphaned orc_access_level columns.
 
 INT-842 dropped the per-user `read / write` API access axis on the
-ORC side. The addon's matching fields (and the read-only enforcement
+AI Workplace side. The addon's matching fields (and the read-only enforcement
 that read them) are gone. Drop the columns so the schema doesn't
 carry dead state.
 """

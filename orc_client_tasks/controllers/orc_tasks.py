@@ -29,11 +29,11 @@ def _not_provisioned() -> werkzeug.wrappers.Response:
 
 
 class OrcTasksController(http.Controller):
-    """Thin proxies between the Odoo-side OWL chat dock and ORC.
+    """Thin proxies between the Odoo-side OWL chat dock and AI Workplace.
 
     Three endpoints cover Phase 2a:
 
-      - GET  /orc/tasks/list  → list my ORC tasks (for the systray
+      - GET  /orc/tasks/list  → list my AI Workplace tasks (for the systray
         popover + the dock's window-restore path)
       - POST /orc/tasks/open  → mint a one-time SSO nonce with a
         return_to pointing at /dashboard/tasks/{id}?embed=1; the
@@ -44,7 +44,7 @@ class OrcTasksController(http.Controller):
         window on it
 
     All routes require an Odoo login (``auth="user"``) and refuse
-    users whose ``orc_enabled`` flag is False. The ORC-side Bearer
+    users whose ``orc_enabled`` flag is False. The AI Workplace-side Bearer
     token lives in ``ir.config_parameter`` and is added to each
     request by ``orc.client.sudo()``.
 
@@ -80,7 +80,7 @@ class OrcTasksController(http.Controller):
                 .list_my_tasks(acting_user=user.login)
             )
         except UserError as exc:
-            _logger.info("ORC list_my_tasks failed: %s", exc)
+            _logger.info("AI Workplace list_my_tasks failed: %s", exc)
             return _json_response(
                 {"ok": False, "error": str(exc)},
                 status=502,
@@ -103,7 +103,7 @@ class OrcTasksController(http.Controller):
 
         The browser consumes the returned {url, nonce} by form-POSTing
         into a hidden form inside the iframe — same pattern as the
-        Phase 1 systray's "Open ORC" flow, minus the top-level window
+        Phase 1 systray's "Open AI Workplace" flow, minus the top-level window
         navigation.
         """
         user = self._guard_user()
@@ -135,16 +135,16 @@ class OrcTasksController(http.Controller):
             .sudo()
             ._build_embed_return_to(room_id)
         )
-        # Forward browser context so ORC's redeem check binds on the
+        # Forward browser context so AI Workplace's redeem check binds on the
         # browser that will actually consume the nonce — same as Phase-1
         # /orc/sso/start. Without these the redeem false-rejects and the
-        # iframe lands on the ORC login screen instead of the embed.
+        # iframe lands on the AI Workplace login screen instead of the embed.
         httpreq = request.httprequest
         browser_ua = httpreq.user_agent.string if httpreq.user_agent else None
         browser_ip = httpreq.remote_addr or None
         # `env.user.lang` is the Odoo user's UI language ("pl_PL",
         # "en_US"…). Pass it raw — `mint_sso_nonce` normalises to a
-        # BCP47 primary tag before forwarding to ORC.
+        # BCP47 primary tag before forwarding to AI Workplace.
         user_lang = user.lang or None
         try:
             data = (
@@ -159,7 +159,7 @@ class OrcTasksController(http.Controller):
                 )
             )
         except UserError as exc:
-            _logger.info("ORC mint_sso_nonce failed: %s", exc)
+            _logger.info("AI Workplace mint_sso_nonce failed: %s", exc)
             return _json_response(
                 {"ok": False, "error": str(exc)},
                 status=502,
@@ -181,7 +181,7 @@ class OrcTasksController(http.Controller):
         csrf=False,
     )
     def create_task(self, **_kwargs):
-        """Create an ORC task on behalf of the caller.
+        """Create an AI Workplace task on behalf of the caller.
 
         Body: { message: str, infrastructure_id?: str }.
         `infrastructure_id` defaults to ``orc.infrastructure_id`` from
@@ -229,7 +229,7 @@ class OrcTasksController(http.Controller):
                 )
             )
         except UserError as exc:
-            _logger.info("ORC create_task failed: %s", exc)
+            _logger.info("AI Workplace create_task failed: %s", exc)
             return _json_response(
                 {"ok": False, "error": str(exc)},
                 status=502,
@@ -249,17 +249,17 @@ class OrcTasksController(http.Controller):
         csrf=False,
     )
     def open_in_orc(self, room_id: str | None = None, **_kwargs):
-        """Top-level SSO landing on a specific task inside full ORC.
+        """Top-level SSO landing on a specific task inside full AI Workplace.
 
         Mirrors ``/orc/sso/start`` from the provisioning addon but with
         ``return_to`` pointing at ``/dashboard/tasks/{room_id}`` (no
-        ``?embed=1``). Used by the chat window's "Open in ORC" link to
+        ``?embed=1``). Used by the chat window's "Open in AI Workplace" link to
         pop the current room in a new tab with the full dashboard chrome.
         """
         user = self._guard_user()
         if user is None:
             return werkzeug.wrappers.Response(
-                response=_("Not provisioned in ORC."),
+                response=_("Not provisioned in AI Workplace."),
                 status=403,
                 content_type="text/plain; charset=utf-8",
             )
@@ -277,9 +277,9 @@ class OrcTasksController(http.Controller):
                 .mint_sso_nonce(email=user.login, return_to=return_to)
             )
         except UserError as exc:
-            _logger.info("ORC mint_sso_nonce (open-in-orc) failed: %s", exc)
+            _logger.info("AI Workplace mint_sso_nonce (open-in-orc) failed: %s", exc)
             return werkzeug.wrappers.Response(
-                response=_("ORC handshake failed: %s") % exc,
+                response=_("AI Workplace handshake failed: %s") % exc,
                 status=502,
                 content_type="text/plain; charset=utf-8",
             )
@@ -288,7 +288,7 @@ class OrcTasksController(http.Controller):
         url = data.get("url")
         if not nonce or not url:
             return werkzeug.wrappers.Response(
-                response=_("ORC returned an incomplete SSO payload."),
+                response=_("AI Workplace returned an incomplete SSO payload."),
                 status=502,
                 content_type="text/plain; charset=utf-8",
             )
@@ -296,8 +296,8 @@ class OrcTasksController(http.Controller):
         # Page title + noscript fallback button are the only end-user
         # visible strings on this redirect page; everything else is
         # auto-submitting JS the user never sees.
-        page_title = _("Opening ORC…")
-        continue_button = _("Continue to ORC")
+        page_title = _("Opening AI Workplace…")
+        continue_button = _("Continue to AI Workplace")
         html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>{escape(page_title)}</title></head>
 <body onload="document.forms[0].submit()">

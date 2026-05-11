@@ -7,7 +7,7 @@ from odoo import api, models
 # the default at read time so a fat-fingered admin doesn't silently
 # break the embed by forwarding a garbage `?theme=` value.
 EMBED_THEME_PARAM = "orc_client_tasks.embed_theme"
-EMBED_THEME_DEFAULT = "dark"
+EMBED_THEME_DEFAULT = "light"
 EMBED_THEME_VALID = ("dark", "light")
 
 
@@ -33,7 +33,7 @@ class OrcClientTasksExt(models.AbstractModel):
     def list_my_tasks(self, *, acting_user: str) -> dict:
         """GET /api/me/tasks on behalf of `acting_user`.
 
-        Returns the raw ORC payload {ok, tasks: [...]}. Each task row
+        Returns the raw AI Workplace payload {ok, tasks: [...]}. Each task row
         carries room_id, name, status, infrastructure_name, org_name,
         last_activity — everything the dock needs to render titles and
         the last-activity timestamp that drives the unread badge.
@@ -58,7 +58,7 @@ class OrcClientTasksExt(models.AbstractModel):
 
         ``message`` is optional. The "+" popover in the systray
         opens the chat window directly on click; the user types
-        their first message inside the chat iframe. The ORC server
+        their first message inside the chat iframe. The AI Workplace server
         (``orc-app/app/api/tasks/create/route.ts``) already supports
         the no-first-message path and the agent has no "wait for
         first message" guard, so an empty room is a usable starting
@@ -94,7 +94,7 @@ class OrcClientTasksExt(models.AbstractModel):
 
         Browser context (UA + IP) is forwarded via X-Browser-* headers
         the same way Phase 1 does; without it the redeem check would
-        false-reject when the user actually clicks through to ORC.
+        false-reject when the user actually clicks through to AI Workplace.
 
         ``lang`` carries the Odoo user's UI language as a raw Odoo
         locale (``pl_PL``, ``en_US`` …); we normalise to a BCP47
@@ -106,7 +106,7 @@ class OrcClientTasksExt(models.AbstractModel):
 
         Server re-validates the prefix on the exchange and consume
         paths (/dashboard/ only). Passing an invalid path surfaces as
-        a UserError raised by ``_request`` (ORC returns 400).
+        a UserError raised by ``_request`` (AI Workplace returns 400).
         """
         body: dict = {"email": email}
         if return_to:

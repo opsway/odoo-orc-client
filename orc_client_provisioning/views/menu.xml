@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <menuitem id="menu_orc_root"
-              name="Odoo Resolution Center"
+              name="AI Workplace"
               web_icon="orc_client_provisioning,static/description/icon.png"
               groups="orc_client_provisioning.group_orc_manager"/>
 

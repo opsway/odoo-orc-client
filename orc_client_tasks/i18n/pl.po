@@ -21,14 +21,14 @@ msgstr ""
 #. module: orc_client_tasks
 #. odoo-javascript
 #: code:addons/orc_client_tasks/static/src/js/orc_chat_service.js:0
-msgid "Failed to create ORC task"
-msgstr "Nie udało się utworzyć zadania ORC"
+msgid "Failed to create AI Workplace task"
+msgstr "Nie udało się utworzyć zadania AI Workplace"
 
 #. module: orc_client_tasks
 #. odoo-javascript
 #: code:addons/orc_client_tasks/static/src/js/orc_chat_service.js:0
-msgid "Failed to open ORC chat"
-msgstr "Nie udało się otworzyć czatu ORC"
+msgid "Failed to open AI Workplace chat"
+msgstr "Nie udało się otworzyć czatu AI Workplace"
 
 #. module: orc_client_tasks
 #. odoo-javascript
@@ -45,8 +45,8 @@ msgstr "Rozwiń"
 #. module: orc_client_tasks
 #. odoo-python
 #: code:addons/orc_client_tasks/controllers/orc_tasks.py:0
-msgid "Not provisioned in ORC."
-msgstr "Brak konta w ORC."
+msgid "Not provisioned in AI Workplace."
+msgstr "Brak konta w AI Workplace."
 
 #. module: orc_client_tasks
 #. odoo-python
@@ -57,26 +57,26 @@ msgstr "wymagany identyfikator pokoju"
 #. module: orc_client_tasks
 #. odoo-python
 #: code:addons/orc_client_tasks/controllers/orc_tasks.py:0
-msgid "ORC handshake failed: %s"
-msgstr "Niepowodzenie połączenia z ORC: %s"
+msgid "AI Workplace handshake failed: %s"
+msgstr "Niepowodzenie połączenia z AI Workplace: %s"
 
 #. module: orc_client_tasks
 #. odoo-python
 #: code:addons/orc_client_tasks/controllers/orc_tasks.py:0
-msgid "ORC returned an incomplete SSO payload."
-msgstr "ORC zwrócił niekompletne dane SSO."
+msgid "AI Workplace returned an incomplete SSO payload."
+msgstr "AI Workplace zwrócił niekompletne dane SSO."
 
 #. module: orc_client_tasks
 #. odoo-python
 #: code:addons/orc_client_tasks/controllers/orc_tasks.py:0
-msgid "Opening ORC…"
-msgstr "Otwieranie ORC…"
+msgid "Opening AI Workplace…"
+msgstr "Otwieranie AI Workplace…"
 
 #. module: orc_client_tasks
 #. odoo-python
 #: code:addons/orc_client_tasks/controllers/orc_tasks.py:0
-msgid "Continue to ORC"
-msgstr "Przejdź do ORC"
+msgid "Continue to AI Workplace"
+msgstr "Przejdź do AI Workplace"
 
 #. module: orc_client_tasks
 #: model_terms:ir.ui.view,arch_db:orc_client_tasks.OrcChatWindow
@@ -86,8 +86,8 @@ msgstr "Zamknij"
 
 #. module: orc_client_tasks
 #: model_terms:ir.ui.view,arch_db:orc_client_tasks.OrcChatWindow
-msgid "Open this chat in ORC"
-msgstr "Otwórz ten czat w ORC"
+msgid "Open this chat in AI Workplace"
+msgstr "Otwórz ten czat w AI Workplace"
 
 #. module: orc_client_tasks
 #: model_terms:ir.ui.view,arch_db:orc_client_tasks.OrcChatWindow
@@ -107,8 +107,8 @@ msgstr "Stanowisko Pracy AI"
 
 #. module: orc_client_tasks
 #: model_terms:ir.ui.view,arch_db:orc_client_tasks.OrcTaskListPopover
-msgid "Open in ORC"
-msgstr "Otwórz w ORC"
+msgid "Open in AI Workplace"
+msgstr "Otwórz w AI Workplace"
 
 #. module: orc_client_tasks
 #: model_terms:ir.ui.view,arch_db:orc_client_tasks.OrcTaskListPopover
@@ -129,3 +129,14 @@ msgstr "Brak czatów."
 #: model_terms:ir.ui.view,arch_db:orc_client_tasks.OrcTaskListPopover
 msgid "Unread activity"
 msgstr "Nieprzeczytane"
+
+#. module: orc_client_tasks
+#. odoo-javascript
+#: code:addons/orc_client_tasks/static/src/xml/orc_chat_templates.xml:0
+msgid "AI Workplace"
+msgstr "AI Workplace"
+
+#. module: orc_client_tasks
+#: model:ir.model,name:orc_client_tasks.model_orc_client
+msgid "AI Workplace HTTP client (stateless)"
+msgstr "Klient HTTP AI Workplace (bezstanowy)"

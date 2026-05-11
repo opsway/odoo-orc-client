@@ -27,7 +27,7 @@ _SEARCH_MAX_LIMIT = 50
 # of the extracted text and drives hash-skip in the cron worker.
 class OrcEmbedding(models.Model):
     _name = "orc.embedding"
-    _description = "ORC semantic search — vector embedding for an Odoo record"
+    _description = "AI Workplace semantic search — vector embedding for an Odoo record"
     _order = "indexed_at desc, id desc"
 
     model = fields.Char(string="Odoo model", required=True, index=True)
@@ -80,6 +80,7 @@ class OrcEmbedding(models.Model):
     # ------------------------------------------------------------ cron
 
     @api.model
+    # pylint: disable=too-many-branches,too-many-statements
     def _cron_reindex_sweep(self):
         """Process pending queue rows.
 
@@ -274,18 +275,18 @@ class OrcEmbedding(models.Model):
             return []
 
         # Embed the query using the same provider as the corpus.
-        try:
-            provider = self._build_provider()
-        except UserError:
-            # Re-raise the operator-friendly message verbatim.
-            raise
+        # _build_provider raises UserError directly with the
+        # operator-friendly message — no extra wrapping needed.
+        provider = self._build_provider()
 
         try:
             query_vectors = provider.embed([query])
         except EmbeddingProviderError as exc:
             # Per README "Failure modes": surface as a clean
             # UserError so odoo-mcp wraps it as a tool error.
-            raise UserError(_("Embedding provider failed: %s") % exc)
+            raise UserError(
+                _("Embedding provider failed: %s") % exc
+            ) from exc
 
         if not query_vectors or len(query_vectors[0]) != provider.dim:
             raise UserError(_(

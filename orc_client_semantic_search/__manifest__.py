@@ -1,16 +1,16 @@
 {
-    "name": "ORC Client — Semantic Search",
-    "version": "18.0.0.1.0",
-    "summary": "Permission-aware semantic search over Odoo records, callable by the ORC agent.",
+    "name": "AI Workplace — Semantic Search",
+    "version": "18.0.0.2.1",
+    "summary": "Permission-aware semantic search over Odoo records, callable by the AI Workplace agent.",
     "description": """
-ORC Client — Semantic Search
+AI Workplace — Semantic Search
 ============================
 
 Indexes Odoo records (knowledge.article in v1) with vector
 embeddings and exposes a single XML-RPC method,
 ``orc.embedding.semantic_search(query, models?, limit?)``, returning
 refs only — ``[{model, id, score}]``. Permissions stay where they
-already work: the ORC agent reads candidates as the end user, and
+already work: the AI Workplace agent reads candidates as the end user, and
 Odoo's ``ir.rule`` filters server-side. No parallel ACL system, no
 gateway dependency.
 

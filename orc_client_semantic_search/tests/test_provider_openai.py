@@ -3,7 +3,10 @@
 HTTP is mocked. Per AGENTS.md, we mock the provider class's HTTP
 client (its ``requests.post`` call), not ``requests`` globally.
 """
+import math
 from unittest.mock import patch
+
+import requests
 
 from odoo.tests.common import TransactionCase, tagged
 
@@ -74,8 +77,6 @@ class OpenAIProviderHappyPathTests(TransactionCase):
         # We rely on this downstream so cosine == dot product. If
         # the provider class ever ships unnormalised vectors, the
         # search method's "score in [0, 1]" promise breaks.
-        import math
-
         p = _make_provider()
         payload = {"data": [{"index": 0, "embedding": [3.0, 4.0, 0.0, 0.0]}]}
         with patch(
@@ -133,7 +134,6 @@ class OpenAIProviderErrorPathTests(TransactionCase):
         # A raw ConnectionError from `requests` becomes our typed
         # EmbeddingProviderError so the cron worker only has one
         # exception to catch.
-        import requests
         p = _make_provider()
         with patch(
             "odoo.addons.orc_client_semantic_search.providers.openai.requests.post",

@@ -8,8 +8,8 @@ from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
-# Default network timeout for every ORC call. Short-ish: these are
-# all synchronous admin actions and a hung ORC shouldn't freeze the
+# Default network timeout for every AI Workplace call. Short-ish: these are
+# all synchronous admin actions and a hung AI Workplace shouldn't freeze the
 # Odoo request worker.
 DEFAULT_TIMEOUT = 30
 
@@ -22,14 +22,14 @@ class OrcClientConfig(models.AbstractModel):
     UserError with a human-readable reason. Callers that want to
     swallow the failure must catch UserError themselves.
 
-    ORC auth contract (v3.3+):
+    AI Workplace auth contract (v3.3+):
       - Server-to-server: `Authorization: Bearer orc_<token>` only.
-      - User-scoped: add `X-Acting-User: <email>`; ORC then treats the
+      - User-scoped: add `X-Acting-User: <email>`; AI Workplace then treats the
         call as "addon acting on behalf of this user" and applies
         that user's org membership + permissions.
     """
     _name = "orc.client"
-    _description = "ORC HTTP client (stateless)"
+    _description = "AI Workplace HTTP client (stateless)"
 
     @api.model
     def _config(self) -> dict:
@@ -39,7 +39,7 @@ class OrcClientConfig(models.AbstractModel):
         infra_id = (icp.get_param("orc.infrastructure_id") or "").strip()
         if not endpoint or not token or not infra_id:
             raise UserError(_(
-                "ORC is not configured. Set orc.endpoint_url, "
+                "AI Workplace is not configured. Set orc.endpoint_url, "
                 "orc.org_token and orc.infrastructure_id in System "
                 "Parameters before enabling users."
             ))
@@ -82,19 +82,19 @@ class OrcClientConfig(models.AbstractModel):
                 timeout=timeout,
             )
         except requests.RequestException as exc:
-            _logger.warning("ORC %s %s failed: %s", method, path, exc)
+            _logger.warning("AI Workplace %s %s failed: %s", method, path, exc)
             raise UserError(_(
-                "Failed to reach ORC at %(url)s: %(err)s"
+                "Failed to reach AI Workplace at %(url)s: %(err)s"
             ) % {"url": url, "err": exc}) from exc
 
         if resp.status_code >= 400:
-            # ORC always returns JSON even on error; fall back to text.
+            # AI Workplace always returns JSON even on error; fall back to text.
             try:
                 err = resp.json().get("error") or resp.text
             except ValueError:
                 err = resp.text
             raise UserError(_(
-                "ORC %(method)s %(path)s returned %(code)s: %(err)s"
+                "AI Workplace %(method)s %(path)s returned %(code)s: %(err)s"
             ) % {
                 "method": method, "path": path,
                 "code": resp.status_code, "err": err,
@@ -113,7 +113,7 @@ class OrcClientConfig(models.AbstractModel):
 
     @api.model
     def provision_user(self, *, email: str, name: str, role: str = "user") -> str:
-        """Create the user + membership in ORC. Returns user_id.
+        """Create the user + membership in AI Workplace. Returns user_id.
 
         Password is random and never shown — the user will only ever
         sign in via SSO handoff. Synapse holds the hash but no login
@@ -127,7 +127,7 @@ class OrcClientConfig(models.AbstractModel):
         )
         user_id = data.get("user_id")
         if not user_id:
-            raise UserError(_("ORC provisioning returned no user_id"))
+            raise UserError(_("AI Workplace provisioning returned no user_id"))
         return user_id
 
     @api.model
@@ -144,7 +144,7 @@ class OrcClientConfig(models.AbstractModel):
         ``odoo_login`` is the login string Odoo authenticates as. May
         differ from ``email`` (e.g. the Odoo ``admin`` user with email
         ``admin@example.com`` has ``login = "admin"``). When ``None``,
-        the Odoo Resolution Center defaults to ``email`` — preserves
+        the AI Workplace defaults to ``email`` — preserves
         pre-refactor behaviour for older deployments that don't pass
         it yet.
         """
@@ -174,7 +174,7 @@ class OrcClientConfig(models.AbstractModel):
         addon's to touch.
 
         "Leaving the company" / full offboarding is an explicit
-        dashboard action on the ORC side; this addon deliberately
+        dashboard action on the AI Workplace side; this addon deliberately
         does NOT escalate beyond per-infra revoke.
         """
         cfg = self._config()
@@ -195,11 +195,11 @@ class OrcClientConfig(models.AbstractModel):
     ) -> dict:
         """Mint a one-time SSO nonce for ``email``.
 
-        The browser context (UA and optionally IP) is forwarded to ORC
-        via ``X-Browser-User-Agent`` / ``X-Browser-IP``. ORC stamps
+        The browser context (UA and optionally IP) is forwarded to AI Workplace
+        via ``X-Browser-User-Agent`` / ``X-Browser-IP``. AI Workplace stamps
         these on the nonce row so the atomic consume at ``/auth/sso``
         can bind on the browser that will actually redeem. Without the
-        forward, ORC would record the Odoo server's ``requests``-
+        forward, AI Workplace would record the Odoo server's ``requests``-
         library UA, which never matches a real browser and would turn
         the redeem check into a false-reject.
         """

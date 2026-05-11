@@ -10,7 +10,7 @@ import { computeIsUnread } from "./orc_chat_service";
  *
  * The iframe is kept around even when folded so a returning user
  * doesn't pay the full SSO handshake + Next.js boot again. That also
- * means each open window holds one SSE connection to ORC — acceptable
+ * means each open window holds one SSE connection to AI Workplace — acceptable
  * at N≤3 (the dock's cap); Phase 2b replaces with a shared SSE via
  * the React SDK extraction.
  */
@@ -93,7 +93,7 @@ export class OrcChatWindow extends Component {
                 this.ui.loading = false;
             }
         } catch {
-            // Cross-origin once the iframe lands on ORC — which means
+            // Cross-origin once the iframe lands on AI Workplace — which means
             // it loaded successfully. Flip the flag unconditionally.
             this.ui.loading = false;
         }

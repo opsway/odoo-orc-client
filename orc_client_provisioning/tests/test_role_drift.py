@@ -11,6 +11,7 @@ payloads + force errors without hitting the network.
 """
 from unittest.mock import patch
 
+from odoo.exceptions import UserError
 from odoo.tests import TransactionCase
 
 
@@ -183,10 +184,8 @@ class TestReconcileDrift(TransactionCase):
     def test_reconcile_http_error_marks_user_error(self):
         """Network/auth blip on list_users → every orc_enabled user
         gets a red badge with the error message."""
-        from odoo.exceptions import UserError as Boom
-
         def fail(*a, **kw):
-            raise Boom("upstream 500")
+            raise UserError("upstream 500")
 
         with patch.multiple(self.env["orc.client"], list_users=fail):
             self.env["res.users"]._cron_orc_reconcile()
@@ -253,7 +252,6 @@ class TestReconcileDrift(TransactionCase):
         self.assertTrue(self.user.orc_last_sync_at)
 
     def test_rotate_stamps_error_and_writes_audit_log(self):
-        from odoo.exceptions import UserError
         self._force_rotation_due(self.user)
 
         def fail(**kw):

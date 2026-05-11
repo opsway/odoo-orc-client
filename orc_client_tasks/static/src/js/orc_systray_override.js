@@ -8,10 +8,10 @@ import { OrcTaskListPopover } from "./orc_task_list_popover";
 import { computeIsUnread } from "./orc_chat_service";
 
 /**
- * Replaces orc_client_provisioning's single-action "Open ORC" systray
+ * Replaces orc_client_provisioning's single-action "Open AI Workplace" systray
  * button with a task-list popover. The green icon stays — click now
- * opens a popover over the ORC tasks for this user; a small "Open in
- * ORC" action inside the popover still offers the Phase-1 new-tab
+ * opens a popover over the AI Workplace tasks for this user; a small "Open in
+ * AI Workplace" action inside the popover still offers the Phase-1 new-tab
  * jump into the full dashboard.
  *
  * We do this via a force-override on the same registry key so the
