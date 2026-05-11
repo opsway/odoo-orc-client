@@ -72,6 +72,7 @@ class OrcClientTasksExt(models.AbstractModel):
         return_to: str | None = None,
         browser_user_agent: str | None = None,
         browser_ip: str | None = None,
+        lang: str | None = None,
     ) -> dict:
         """Phase 2a override that supports the optional return_to.
 
@@ -85,6 +86,14 @@ class OrcClientTasksExt(models.AbstractModel):
         the same way Phase 1 does; without it the redeem check would
         false-reject when the user actually clicks through to ORC.
 
+        ``lang`` carries the Odoo user's UI language as a raw Odoo
+        locale (``pl_PL``, ``en_US`` …); we normalise to a BCP47
+        primary tag (``pl``, ``en``) so the orc-app side doesn't have
+        to know Odoo's territory variants. Server-side validates
+        against its actual locale catalog and silently drops unknown
+        values, so sending ``de`` from a tenant where orc-app doesn't
+        ship German messages is harmless.
+
         Server re-validates the prefix on the exchange and consume
         paths (/dashboard/ only). Passing an invalid path surfaces as
         a UserError raised by ``_request`` (ORC returns 400).
@@ -92,6 +101,12 @@ class OrcClientTasksExt(models.AbstractModel):
         body: dict = {"email": email}
         if return_to:
             body["return_to"] = return_to
+        if lang:
+            # "pl_PL" → "pl"; "EN_US" → "en". Defensive lower-case +
+            # split because Odoo's lang field is technically free text.
+            primary = lang.split("_")[0].strip().lower()
+            if primary:
+                body["lang"] = primary
         extra = {
             "X-Browser-User-Agent": browser_user_agent,
             "X-Browser-IP": browser_ip,

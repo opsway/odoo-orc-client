@@ -5,7 +5,7 @@ from urllib.parse import quote
 import werkzeug.wrappers
 from markupsafe import escape
 
-from odoo import http
+from odoo import _, http
 from odoo.exceptions import UserError
 from odoo.http import request
 
@@ -136,6 +136,10 @@ class OrcTasksController(http.Controller):
         httpreq = request.httprequest
         browser_ua = httpreq.user_agent.string if httpreq.user_agent else None
         browser_ip = httpreq.remote_addr or None
+        # `env.user.lang` is the Odoo user's UI language ("pl_PL",
+        # "en_US"…). Pass it raw — `mint_sso_nonce` normalises to a
+        # BCP47 primary tag before forwarding to ORC.
+        user_lang = user.lang or None
         try:
             data = (
                 request.env["orc.client"]
@@ -145,6 +149,7 @@ class OrcTasksController(http.Controller):
                     return_to=return_to,
                     browser_user_agent=browser_ua,
                     browser_ip=browser_ip,
+                    lang=user_lang,
                 )
             )
         except UserError as exc:
@@ -248,13 +253,13 @@ class OrcTasksController(http.Controller):
         user = self._guard_user()
         if user is None:
             return werkzeug.wrappers.Response(
-                response="Not provisioned in ORC.",
+                response=_("Not provisioned in ORC."),
                 status=403,
                 content_type="text/plain; charset=utf-8",
             )
         if not isinstance(room_id, str) or not room_id.startswith("!"):
             return werkzeug.wrappers.Response(
-                response="room_id required",
+                response=_("room_id required"),
                 status=400,
                 content_type="text/plain; charset=utf-8",
             )
@@ -268,7 +273,7 @@ class OrcTasksController(http.Controller):
         except UserError as exc:
             _logger.info("ORC mint_sso_nonce (open-in-orc) failed: %s", exc)
             return werkzeug.wrappers.Response(
-                response=f"ORC handshake failed: {exc}",
+                response=_("ORC handshake failed: %s") % exc,
                 status=502,
                 content_type="text/plain; charset=utf-8",
             )
@@ -277,17 +282,22 @@ class OrcTasksController(http.Controller):
         url = data.get("url")
         if not nonce or not url:
             return werkzeug.wrappers.Response(
-                response="ORC returned an incomplete SSO payload.",
+                response=_("ORC returned an incomplete SSO payload."),
                 status=502,
                 content_type="text/plain; charset=utf-8",
             )
 
+        # Page title + noscript fallback button are the only end-user
+        # visible strings on this redirect page; everything else is
+        # auto-submitting JS the user never sees.
+        page_title = _("Opening ORC…")
+        continue_button = _("Continue to ORC")
         html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Opening ORC…</title></head>
+<html><head><meta charset="utf-8"><title>{escape(page_title)}</title></head>
 <body onload="document.forms[0].submit()">
   <form method="POST" action="{escape(url)}" target="_top">
     <input type="hidden" name="nonce" value="{escape(nonce)}">
-    <noscript><button type="submit">Continue to ORC</button></noscript>
+    <noscript><button type="submit">{escape(continue_button)}</button></noscript>
   </form>
 </body></html>"""
         return werkzeug.wrappers.Response(

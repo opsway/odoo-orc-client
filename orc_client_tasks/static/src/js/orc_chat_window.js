@@ -2,6 +2,7 @@
 
 import { Component, onMounted, useEffect, useRef, useState } from "@odoo/owl";
 import { useService } from "@web/core/utils/hooks";
+import { _t } from "@web/core/l10n/translation";
 import { computeIsUnread } from "./orc_chat_service";
 
 /**
@@ -125,5 +126,17 @@ export class OrcChatWindow extends Component {
     get unread() {
         const t = this.task;
         return t ? computeIsUnread(t, this.state.lastViewed) : false;
+    }
+
+    /**
+     * Title for the fold toggle. Bound from the template via
+     * `t-att-title="foldTitle"`; can't inline the conditional with
+     * `_t(...)` calls inside a `t-att-*` expression because Odoo's
+     * QWeb translation extractor doesn't follow JS expressions —
+     * keeping the wrapper here means both labels show up in the
+     * generated POT.
+     */
+    get foldTitle() {
+        return this.props.folded ? _t("Unfold") : _t("Fold");
     }
 }
