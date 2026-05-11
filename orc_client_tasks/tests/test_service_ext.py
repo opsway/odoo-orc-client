@@ -174,3 +174,73 @@ class TestOrcClientTasksExt(TransactionCase):
                 "return_to": "/dashboard/tasks/%21abc%3Ahost?embed=1",
             },
         )
+
+    # -------------------------------------------------- mint_sso_nonce (lang)
+
+    def test_mint_sso_nonce_forwards_lang_as_primary_tag(self):
+        """Odoo locales come as ``pl_PL``/``en_US``/``de_DE``;
+        orc-app's locale list uses BCP47 primary tags (``pl``, ``en``,
+        ``de``). Normalise on the addon side so the server doesn't have
+        to know Odoo's territory variants."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "nonce": "n3", "url": "https://orc.test/auth/sso"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            self.env["orc.client"].mint_sso_nonce(
+                email="alice@acme.test",
+                lang="pl_PL",
+            )
+
+        self.assertEqual(captured["json_body"].get("lang"), "pl")
+
+    def test_mint_sso_nonce_omits_lang_when_falsy(self):
+        """An Odoo user with no ``lang`` set (rare but possible) must
+        not poison the request body — orc-app drops unknown values
+        anyway, but sending an empty string is noisier than omitting
+        the field."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "nonce": "n4", "url": "https://orc.test/auth/sso"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            self.env["orc.client"].mint_sso_nonce(
+                email="alice@acme.test",
+                lang=None,
+            )
+            self.env["orc.client"].mint_sso_nonce(
+                email="alice@acme.test",
+                lang="",
+            )
+            self.env["orc.client"].mint_sso_nonce(
+                email="alice@acme.test",
+                lang=False,
+            )
+
+        # The last call's body shouldn't include lang.
+        self.assertNotIn("lang", captured["json_body"])
+
+    def test_mint_sso_nonce_lowercases_lang(self):
+        """Defensive: a future Odoo locale code that comes through
+        upper-cased (or with the primary tag already split off but
+        capitalised) should land as a plain lower-case primary tag."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "nonce": "n5", "url": "https://orc.test/auth/sso"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            self.env["orc.client"].mint_sso_nonce(
+                email="alice@acme.test",
+                lang="EN_US",
+            )
+
+        self.assertEqual(captured["json_body"].get("lang"), "en")

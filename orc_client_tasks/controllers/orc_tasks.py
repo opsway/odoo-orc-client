@@ -136,6 +136,10 @@ class OrcTasksController(http.Controller):
         httpreq = request.httprequest
         browser_ua = httpreq.user_agent.string if httpreq.user_agent else None
         browser_ip = httpreq.remote_addr or None
+        # `env.user.lang` is the Odoo user's UI language ("pl_PL",
+        # "en_US"…). Pass it raw — `mint_sso_nonce` normalises to a
+        # BCP47 primary tag before forwarding to ORC.
+        user_lang = user.lang or None
         try:
             data = (
                 request.env["orc.client"]
@@ -145,6 +149,7 @@ class OrcTasksController(http.Controller):
                     return_to=return_to,
                     browser_user_agent=browser_ua,
                     browser_ip=browser_ip,
+                    lang=user_lang,
                 )
             )
         except UserError as exc:
