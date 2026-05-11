@@ -76,19 +76,6 @@ $orc-chat-header-bg: #66B57D;
         .o_orc_chat_compose_toggle { padding: 2px 6px; }
     }
 
-    .o_orc_chat_composer {
-        padding: 10px 12px;
-        border-bottom: 1px solid var(--bs-border-color, #e5e7eb);
-
-        textarea { resize: none; }
-
-        .o_orc_chat_composer_actions {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 6px;
-        }
-    }
-
     .o_orc_chat_popover_list {
         flex: 1;
         overflow-y: auto;

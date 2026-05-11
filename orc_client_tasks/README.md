@@ -3,7 +3,9 @@
 Depends on `orc_client_provisioning`. Adds an in-Odoo entry point to ORC chats:
 
 - Systray icon (overrides Phase-1's icon) shows a popover listing the
-  user's ORC tasks (live count of unread, inline new-task composer).
+  user's ORC tasks (live count of unread). A "+" button creates an
+  empty task room and opens a chat window on it in one click; the
+  user types their first message inside the chat itself.
 - "Open in app" button on the popover header opens the full ORC
   dashboard in a new top-level tab via `/orc/sso/start` (the Phase-1
   SSO flow).

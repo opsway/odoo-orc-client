@@ -75,6 +75,66 @@ class TestOrcClientTasksExt(TransactionCase):
         )
         self.assertEqual(data["room_id"], "!new:host")
 
+    def test_create_task_with_empty_message_still_creates_room(self):
+        """Direct-open-chat flow: clicking "+" creates a fresh room
+        without an initial message; the user types their first
+        message inside the chat iframe. The service must let the
+        empty-string `message` through to ORC, which already
+        supports the no-first-message path."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "room_id": "!empty:host"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            data = self.env["orc.client"].create_task(
+                acting_user="alice@acme.test",
+                infrastructure_id="22222222-2222-2222-2222-222222222222",
+                message="",
+            )
+
+        # Wire shape is symmetric — `message` is still in the body
+        # (as an empty string), not silently dropped. Keeps the ORC
+        # endpoint contract single-shape regardless of whether the
+        # caller seeded a first message or not.
+        self.assertEqual(
+            captured["json_body"],
+            {
+                "message": "",
+                "infrastructure_id": "22222222-2222-2222-2222-222222222222",
+            },
+        )
+        self.assertEqual(data["room_id"], "!empty:host")
+
+    def test_create_task_message_is_optional(self):
+        """The service accepts a call with no `message` kwarg at
+        all — same effective behaviour as `message=""`. Keeps the
+        addon-side popover JS terse (no need to thread an empty
+        string through every call site)."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "room_id": "!omitted:host"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            data = self.env["orc.client"].create_task(
+                acting_user="alice@acme.test",
+                infrastructure_id="22222222-2222-2222-2222-222222222222",
+            )
+
+        self.assertEqual(
+            captured["json_body"],
+            {
+                "message": "",
+                "infrastructure_id": "22222222-2222-2222-2222-222222222222",
+            },
+        )
+        self.assertEqual(data["room_id"], "!omitted:host")
+
     # -------------------------------------------------------------- mint_sso
 
     def test_mint_sso_nonce_without_return_to_omits_field(self):

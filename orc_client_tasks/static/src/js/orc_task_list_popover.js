@@ -9,9 +9,15 @@ import { computeIsUnread } from "./orc_chat_service";
  * the systray's dropdown. Clicking a row opens a chat window via
  * the shared orc_chat service.
  *
- * Composing a new task happens inline: a textarea at the top, Enter
- * or click "Create" to send. Infrastructure is always the configured
- * default in Phase 2a — a picker is Phase 2c territory.
+ * Composing a new task is one click: the "+" button creates an
+ * empty room server-side and immediately opens a chat window on
+ * it. The user types their first message inside the chat iframe's
+ * composer — same place every follow-up message goes. The ORC
+ * server already supports the no-first-message creation path; see
+ * `services/orc_client_tasks_ext.py::create_task`.
+ *
+ * Infrastructure is always the configured default in Phase 2a —
+ * a picker is Phase 2c territory.
  */
 export class OrcTaskListPopover extends Component {
     static template = "orc_client_tasks.OrcTaskListPopover";
@@ -27,11 +33,10 @@ export class OrcTaskListPopover extends Component {
         // what actually subscribes this component to re-renders when
         // the shared state (tasks list, unread markers) mutates.
         this.state = useState(this.orcChat.state);
-        // Local-only component state: the new-task composer.
+        // Local-only component state: in-flight guard so a
+        // double-click on "+" doesn't spawn two empty rooms.
         this.ui = useState({
-            composerOpen: false,
-            composerText: "",
-            composerBusy: false,
+            creatingTask: false,
         });
     }
 
@@ -80,11 +85,6 @@ export class OrcTaskListPopover extends Component {
         if (this.props.onPicked) this.props.onPicked();
     }
 
-    onClickCompose() {
-        this.ui.composerOpen = !this.ui.composerOpen;
-        if (this.ui.composerOpen) this.ui.composerText = "";
-    }
-
     onClickOpenInOrc() {
         // Phase-1 fallback: jump to the full ORC dashboard in a new tab,
         // signed in via the same SSO start endpoint orc_client_provisioning ships.
@@ -92,27 +92,21 @@ export class OrcTaskListPopover extends Component {
         if (this.props.onPicked) this.props.onPicked();
     }
 
-    async onSubmitCompose() {
-        const text = this.ui.composerText.trim();
-        if (!text || this.ui.composerBusy) return;
-        this.ui.composerBusy = true;
+    async onClickNewTask() {
+        // Single-click flow: create the room with no first message,
+        // immediately open a chat window on it (the service's
+        // `createTask` already calls `openTask` on success), close
+        // the popover. The user types their first message inside
+        // the chat iframe.
+        if (this.ui.creatingTask) return;
+        this.ui.creatingTask = true;
         try {
-            await this.orcChat.createTask({ message: text });
-            this.ui.composerOpen = false;
-            this.ui.composerText = "";
+            await this.orcChat.createTask({});
             if (this.props.onPicked) this.props.onPicked();
         } catch {
             // notification already surfaced by the service
         } finally {
-            this.ui.composerBusy = false;
-        }
-    }
-
-    onComposerKeydown(ev) {
-        // Enter sends; Shift+Enter inserts newline.
-        if (ev.key === "Enter" && !ev.shiftKey) {
-            ev.preventDefault();
-            this.onSubmitCompose();
+            this.ui.creatingTask = false;
         }
     }
 }
