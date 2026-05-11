@@ -112,7 +112,7 @@
                     <button type="button"
                             class="btn btn-sm btn-link"
                             t-on-click.stop="onToggleFold"
-                            t-att-title="props.folded ? 'Unfold' : 'Fold'">
+                            t-att-title="foldTitle">
                         <i t-att-class="props.folded ? 'fa fa-chevron-up' : 'fa fa-chevron-down'"/>
                     </button>
                     <button type="button"

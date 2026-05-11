@@ -2,6 +2,7 @@
 
 import { registry } from "@web/core/registry";
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { session } from "@web/session";
 
 /**
@@ -188,7 +189,7 @@ const orcChatService = {
             });
             const data = await res.json();
             if (!data.ok) {
-                notification.add(data.error || "Failed to open ORC chat", {
+                notification.add(data.error || _t("Failed to open ORC chat"), {
                     type: "warning",
                 });
                 throw new Error(data.error || "handshake failed");
@@ -209,7 +210,7 @@ const orcChatService = {
             });
             const data = await res.json();
             if (!data.ok || !data.room_id) {
-                notification.add(data.error || "Failed to create ORC task", {
+                notification.add(data.error || _t("Failed to create ORC task"), {
                     type: "danger",
                 });
                 throw new Error(data.error || "create failed");
