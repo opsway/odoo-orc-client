@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Provisioning",
-    "version": "18.0.1.10.1",
+    "version": "18.0.1.10.2",
     "summary": "Provision Odoo users into the AI Workplace with auto-rotated API keys and single-click SSO.",
     "description": """
 AI Workplace — Provisioning
