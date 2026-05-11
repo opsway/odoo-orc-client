@@ -44,6 +44,12 @@ This means we deliberately do **not** replicate Odoo's dynamic
 record rules in the index. Adding model B to the indexed set is a
 config-row change with zero ACL implications.
 
+**Business-user explainer:** see
+[`docs/semantic-search-security.md`](docs/semantic-search-security.md)
+for a sequence diagram + narrative aimed at admins / operators who
+need to understand the permission model without reading the engine
+schema.
+
 ## Data model
 
 ### `orc.embedding` (one row per indexed record)
