@@ -5,9 +5,9 @@
             <button type="button"
                     class="btn btn-link o-orc-systray-btn"
                     t-on-click="onClick"
-                    title="Open Odoo Resolution Center">
+                    title="Open AI Workplace">
                 <img src="/orc_client_provisioning/static/description/icon.svg"
-                     class="o-orc-systray-icon" alt="Open Odoo Resolution Center"/>
+                     class="o-orc-systray-icon" alt="Open AI Workplace"/>
             </button>
         </div>
     </t>

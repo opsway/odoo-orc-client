@@ -1,7 +1,10 @@
 import logging
+import time
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
+
+from ..providers.openai import OpenAIEmbeddingProvider
 
 
 _logger = logging.getLogger(__name__)
@@ -19,7 +22,7 @@ _logger = logging.getLogger(__name__)
 # alternative — two separate models — felt like overkill for v1.
 class OrcEmbeddingConfig(models.Model):
     _name = "orc.embedding.config"
-    _description = "ORC semantic search — provider config + per-model toggles"
+    _description = "AI Workplace semantic search — provider config + per-model toggles"
     _rec_name = "model_name"
 
     is_global = fields.Boolean(
@@ -151,18 +154,12 @@ class OrcEmbeddingConfig(models.Model):
         a UserError with a readable message instead of silently
         flashing a misleading success.
         """
-        import time
-
         self.ensure_one()
         if not self.is_global:
             raise UserError(_("Only the global config row supports this action."))
 
         if not self.provider_api_key:
             raise UserError(_("Set the provider API key first."))
-
-        # Lazy import — keeps ``providers`` out of the module-load
-        # path for the row create/upgrade hooks.
-        from ..providers.openai import OpenAIEmbeddingProvider
 
         provider = OpenAIEmbeddingProvider(
             url=self.provider_url or "https://api.openai.com/v1/embeddings",
@@ -175,7 +172,7 @@ class OrcEmbeddingConfig(models.Model):
         try:
             vectors = provider.embed(["ping"])
         except Exception as exc:
-            raise UserError(_("Provider call failed: %s") % exc)
+            raise UserError(_("Provider call failed: %s") % exc) from exc
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         if not vectors or not vectors[0]:

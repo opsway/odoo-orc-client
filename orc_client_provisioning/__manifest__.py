@@ -1,19 +1,19 @@
 {
-    "name": "Odoo Resolution Center — Provisioning",
-    "version": "18.0.1.9.0",
-    "summary": "Provision Odoo users into the Odoo Resolution Center with auto-rotated API keys and single-click SSO.",
+    "name": "AI Workplace — Provisioning",
+    "version": "18.0.1.10.1",
+    "summary": "Provision Odoo users into the AI Workplace with auto-rotated API keys and single-click SSO.",
     "description": """
-Odoo Resolution Center — Provisioning
+AI Workplace — Provisioning
 =====================================
 
 Phase 1 addon. Lets an Odoo admin pick which users get access to the
-Odoo Resolution Center. For each enrolled user the addon:
+AI Workplace. For each enrolled user the addon:
 
-- creates a dedicated Odoo API key scoped "ORC (auto-managed)"
-- ships the key to the Odoo Resolution Center (encrypted at rest via pgcrypto)
+- creates a dedicated Odoo API key scoped "AI Workplace (auto-managed)"
+- ships the key to the AI Workplace (encrypted at rest via pgcrypto)
 - rotates the key on a configurable interval (default 30 days)
-- exposes a systray button that signs the user in to the Odoo Resolution
-  Center with no second password prompt (server-to-server nonce exchange,
+- exposes a systray button that signs the user in to the AI Workplace
+  with no second password prompt (server-to-server nonce exchange,
   one-time, 60-second TTL)
 
 Configuration is via ``ir.config_parameter`` keys. See the repo README.

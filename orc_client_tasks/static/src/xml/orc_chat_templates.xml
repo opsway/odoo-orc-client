@@ -3,7 +3,7 @@
 
     <!-- Override of orc_client_provisioning.OrcSystray: same green icon,
          new click behavior. A click toggles the task-list popover
-         instead of opening ORC in a new tab. The old "open in a new
+         instead of opening AI Workplace in a new tab. The old "open in a new
          tab" action is still available from inside the popover. -->
     <t t-name="orc_client_tasks.OrcSystrayWithTasks">
         <div t-if="enabled" class="o-dropdown dropdown o-orc-systray">
@@ -12,7 +12,7 @@
                     t-on-click="onToggleDropdown"
                     title="AI Workplace">
                 <img src="/orc_client_provisioning/static/description/icon.svg"
-                     class="o-orc-systray-icon" alt="ORC"/>
+                     class="o-orc-systray-icon" alt="AI Workplace"/>
                 <span t-if="badgeLabel"
                       class="o_orc_chat_badge"
                       t-esc="badgeLabel"/>
@@ -33,7 +33,7 @@
                     <button type="button"
                             class="btn btn-sm btn-link"
                             t-on-click="onClickOpenInOrc"
-                            title="Open in ORC">
+                            title="Open in AI Workplace">
                         <i class="fa fa-external-link"/>
                         <span class="ms-1">Open in app</span>
                     </button>
@@ -106,7 +106,7 @@
                     <button type="button"
                             class="btn btn-sm btn-link o_orc_chat_open_in_orc"
                             t-on-click.stop="onOpenInOrc"
-                            title="Open this chat in ORC">
+                            title="Open this chat in AI Workplace">
                         <i class="fa fa-external-link"/>
                     </button>
                     <button type="button"
@@ -124,9 +124,7 @@
                 </div>
             </div>
             <div class="o_orc_chat_window_body">
-                <div t-if="ui.loading and !ui.error" class="o_orc_chat_window_loading">
-                    Opening chat…
-                </div>
+                <div t-if="ui.loading and !ui.error" class="o_orc_chat_window_loading">Opening chat…</div>
                 <div t-if="ui.error" class="o_orc_chat_window_error">
                     <strong>Couldn't open chat.</strong>
                     <div class="small text-muted mt-1" t-esc="ui.error"/>

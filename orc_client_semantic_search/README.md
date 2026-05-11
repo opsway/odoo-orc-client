@@ -1,7 +1,7 @@
 # `orc_client_semantic_search`
 
 Permission-aware semantic search over Odoo records, exposed to the
-ORC agent via a single XML-RPC method.
+AI Workplace agent via a single XML-RPC method.
 
 The agent today finds Odoo records with hand-built keyword domains
 (`name ilike "..."`). That breaks on paraphrase: a user asking
@@ -14,9 +14,9 @@ read by the agent's principal user.
 ## How it fits
 
 - **This module** holds embeddings + runs the search inside the
-  tenant's Odoo. It calls the embedding provider directly; the ORC
+  tenant's Odoo. It calls the embedding provider directly; the AI Workplace
   gateway is not in the embed path.
-- **`odoo-mcp`** (in the ORC repo) gains one new typed tool,
+- **`odoo-mcp`** (in the AI Workplace repo) gains one new typed tool,
   `odoo_semantic_search`, that proxies to this module's
   `orc.embedding.semantic_search()` method.
 - **The agent** uses semantic_search to locate candidate records,

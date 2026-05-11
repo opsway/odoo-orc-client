@@ -5,20 +5,19 @@ from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
-ORC_KEY_NAME = "ORC (auto-managed)"
+ORC_KEY_NAME = "AI Workplace (auto-managed)"
 
 
 class ResUsers(models.Model):
     _inherit = "res.users"
 
     orc_enabled = fields.Boolean(
-        string="Automated Odoo Access with AI tools",
+        string="AI Workplace access",
         default=False,
         help=(
-            "When enabled, the user is provisioned into the Odoo "
-            "Resolution Center, gets an auto-managed Odoo API key "
-            "pushed to it, and sees the systray icon to open their "
-            "Odoo Resolution Center conversations."
+            "When enabled, the user is provisioned into AI Workplace, "
+            "gets an auto-managed Odoo API key pushed to it, and sees "
+            "the systray icon to open their AI Workplace conversations."
         ),
     )
     orc_user_id = fields.Char(
@@ -44,10 +43,10 @@ class ResUsers(models.Model):
         copy=False,
     )
     orc_is_manager = fields.Boolean(
-        string="Is Odoo Resolution Center manager",
+        string="Is AI Workplace manager",
         compute="_compute_orc_is_manager",
         help=(
-            "True when the user belongs to the Odoo Resolution Center "
+            "True when the user belongs to the AI Workplace "
             "manager group (implied by base.group_system by default)."
         ),
     )
@@ -90,14 +89,14 @@ class ResUsers(models.Model):
 
     def _orc_desired_role(self) -> str:
         """The addon only provisions ``member`` — admin promotion
-        happens in the ORC dashboard, not here. The
+        happens in the AI Workplace dashboard, not here. The
         ``orc_is_manager`` flag still drives view affordances but
-        no longer auto-promotes the user to ORC admin.
+        no longer auto-promotes the user to AI Workplace admin.
         """
         return "member"
 
     def _orc_generate_api_key(self):
-        """Generate a new Odoo API key for this user, tagged as ORC-managed."""
+        """Generate a new Odoo API key for this user, tagged as AI Workplace-managed."""
         self.ensure_one()
         icp = self.env["ir.config_parameter"].sudo()
         rotation_days = int(icp.get_param("orc.rotation_days") or 30)
@@ -144,12 +143,12 @@ class ResUsers(models.Model):
         })
 
     def action_orc_provision(self):
-        """Provision / re-provision this user in ORC.
+        """Provision / re-provision this user in AI Workplace.
 
         Ordering (zero-downtime on re-run):
           1. Generate NEW key locally.
-          2. Create user in ORC (idempotent — 200 if already exists).
-          3. Push NEW key to ORC (upsert semantics in user_odoo_keys).
+          2. Create user in AI Workplace (idempotent — 200 if already exists).
+          3. Push NEW key to AI Workplace (upsert semantics in user_odoo_keys).
           4. Revoke OLD key only AFTER (2) + (3) succeeded.
 
         Any exception between (1) and (3) rolls back the Odoo TX; the
@@ -165,10 +164,10 @@ class ResUsers(models.Model):
             old_key_row = user.orc_api_key_id
 
             try:
-                # 2. Ensure user exists in ORC with the right role.
-                # Role is derived from group membership: ORC-manager
+                # 2. Ensure user exists in AI Workplace with the right role.
+                # Role is derived from group membership: AI Workplace-manager
                 # group → admin; everyone else → user. provision_user
-                # is idempotent on the ORC side, so calling it on
+                # is idempotent on the AI Workplace side, so calling it on
                 # every run keeps role in sync.
                 desired_role = user._orc_desired_role()
                 orc_uid = client.provision_user(
@@ -179,17 +178,17 @@ class ResUsers(models.Model):
                 if not user.orc_user_id:
                     user.sudo().write({"orc_user_id": orc_uid})
 
-                # 3. Push the new Odoo API key. ORC stores it
+                # 3. Push the new Odoo API key. AI Workplace stores it
                 # encrypted; the agent will use it to call Odoo
                 # tools as this user.
                 client.push_odoo_key(
                     email=user.login,
                     api_key=new_raw_key,
                     # On records where login != email (e.g. the
-                    # built-in ``admin`` user), the Odoo Resolution
-                    # Center needs this to stamp Odoo writes with the
-                    # right identity rather than defaulting to the
-                    # caller's email.
+                    # built-in ``admin`` user), AI Workplace needs
+                    # this to stamp Odoo writes with the right
+                    # identity rather than defaulting to the caller's
+                    # email.
                     odoo_login=user.login,
                 )
             except Exception:
@@ -198,7 +197,7 @@ class ResUsers(models.Model):
                 raise
 
             # 4. Revoke old key (if any). Best-effort — its presence
-            #    won't leak access now that ORC has the new one, but we
+            #    won't leak access now that AI Workplace has the new one, but we
             #    remove it to cap blast radius.
             if old_key_row and old_key_row.id != new_key_row.id:
                 user._orc_revoke_key(old_key_row)
@@ -220,12 +219,12 @@ class ResUsers(models.Model):
         """Revoke this user's access on THIS Odoo instance only.
 
         Per the A₁ design: unticking ``orc_enabled`` is per-infra
-        revoke, not full offboarding. We drop the user's ORC-managed
-        Odoo API key (local) and tell ORC to delete the matching
+        revoke, not full offboarding. We drop the user's AI Workplace-managed
+        Odoo API key (local) and tell AI Workplace to delete the matching
         ``user_odoo_keys`` row + ``infrastructure.member`` relation.
 
         We INTENTIONALLY keep ``orc_user_id`` as a breadcrumb so
-        re-ticking ``orc_enabled`` later recovers the same ORC
+        re-ticking ``orc_enabled`` later recovers the same AI Workplace
         identity rather than re-provisioning from scratch. The
         user's organization membership, historical task rooms, and
         enrolments on other Odoos remain untouched — those are not
@@ -252,8 +251,8 @@ class ResUsers(models.Model):
                 "orc_api_key_id": False,
                 "orc_last_rotation_at": False,
                 # orc_user_id + orc_provisioned_at kept as breadcrumbs;
-                # re-ticking replays provisioning against the same ORC
-                # identity (provision_user is idempotent on the ORC
+                # re-ticking replays provisioning against the same AI Workplace
+                # identity (provision_user is idempotent on the AI Workplace
                 # side so this is safe).
             })
             self.env["orc.audit.log"].sudo().create({
@@ -287,7 +286,7 @@ class ResUsers(models.Model):
         res = super(ResUsers, self_inflight).write(vals)
         for user in self_inflight:
             # Re-provision fires when `orc_enabled` flips true AND
-            # there's no live ORC-managed API key — covers both the
+            # there's no live AI Workplace-managed API key — covers both the
             # "never enrolled" case (orc_user_id is None) and the
             # "previously unchecked, now re-ticked" case (orc_user_id
             # survives as a breadcrumb but orc_api_key_id was cleared
@@ -335,8 +334,8 @@ class ResUsers(models.Model):
 
         Per email in (local_enabled ∪ remote):
           - local_enabled + remote present  → in sync (stamp ok)
-          - local_enabled + remote missing  → re-provision to ORC
-          - remote present + local disabled → revoke from ORC
+          - local_enabled + remote missing  → re-provision to AI Workplace
+          - remote present + local disabled → revoke from AI Workplace
           - remote present + no local user  → orphan; audit-log only
 
         "Remote present" means the user holds a key on THIS infra.
@@ -386,7 +385,7 @@ class ResUsers(models.Model):
                 continue
             try:
                 user.action_orc_provision()
-                user._orc_stamp_sync("ok", "re-provisioned to ORC")
+                user._orc_stamp_sync("ok", "re-provisioned to AI Workplace")
             except Exception as exc:
                 _logger.warning(
                     "[orc] reconcile re-provision failed for %s: %s",
@@ -423,7 +422,7 @@ class ResUsers(models.Model):
                     continue
                 try:
                     client.revoke_infra_access(email=email)
-                    user._orc_stamp_sync("ok", "deprovisioned from ORC")
+                    user._orc_stamp_sync("ok", "deprovisioned from AI Workplace")
                 except Exception as exc:
                     _logger.warning(
                         "[orc] reconcile deprovision failed for %s: %s",
@@ -439,7 +438,7 @@ class ResUsers(models.Model):
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
-        """Revoke ORC-tagged api keys not referenced by any res.users."""
+        """Revoke AI Workplace-tagged api keys not referenced by any res.users."""
         keys = self.env["res.users.apikeys"].sudo().search([("name", "=", ORC_KEY_NAME)])
         referenced_ids = set(self.search([("orc_api_key_id", "!=", False)]).mapped("orc_api_key_id.id"))
         for k in keys:
@@ -461,7 +460,7 @@ class ResUsers(models.Model):
         """Hourly. Fast, safe, idempotent.
 
         Runs the reconcile pass, which now includes role-drift detection
-        and rotation so an ORC admin flipping a user to/from
+        and rotation so an AI Workplace admin flipping a user to/from
         ``user_readonly`` propagates to the Odoo side within ≤ 1 hour
         without waiting for the regular rotation-by-expiration schedule.
         """

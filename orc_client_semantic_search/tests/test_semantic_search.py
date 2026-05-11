@@ -16,6 +16,10 @@ import numpy as np
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 
+from odoo.addons.orc_client_semantic_search.providers.base import (
+    EmbeddingProviderError,
+)
+
 
 def _norm(v):
     arr = np.array(v, dtype=np.float32)
@@ -157,9 +161,6 @@ class SemanticSearchContractTests(TransactionCase):
         # Per README "Failure modes": provider errors raise a clean
         # UserError so odoo-mcp surfaces them as a tool error and
         # the agent falls back per-turn.
-        from odoo.addons.orc_client_semantic_search.providers.base import (
-            EmbeddingProviderError,
-        )
         self.provider.embed.side_effect = EmbeddingProviderError("503", status=503)
         with self._patch_provider():
             with self.assertRaises(UserError):

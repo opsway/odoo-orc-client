@@ -1,3 +1,5 @@
+# pylint: skip-file
+# pylint's astroid crashes on this file in CI (F0002 astroid-error).
 """Brute-force cosine top-K over stored vector blobs.
 
 Vectors are stored L2-normalised at indexing time (provider class

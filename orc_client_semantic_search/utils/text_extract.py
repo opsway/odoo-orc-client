@@ -84,7 +84,7 @@ def plain(raw) -> str:
     return str(raw)
 
 
-def attachment(raw) -> str:
+def attachment(raw) -> str:  # pylint: disable=too-many-return-statements
     """Decode an ``ir.attachment``'s ``datas`` field (base64 bytes)
     and dispatch on mimetype.
 
@@ -112,7 +112,7 @@ def attachment(raw) -> str:
     # Sniff: PDF magic bytes vs text.
     if data[:5] == b"%PDF-":
         try:
-            from pypdf import PdfReader
+            from pypdf import PdfReader  # pylint: disable=import-outside-toplevel  # optional dep
             reader = PdfReader(io.BytesIO(data))
             pages = []
             for page in reader.pages:

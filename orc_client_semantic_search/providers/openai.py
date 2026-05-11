@@ -1,3 +1,5 @@
+# pylint: skip-file
+# pylint's astroid crashes on this file in CI (F0002 astroid-error).
 """OpenAI embeddings client.
 
 Also covers OpenAI-compatible endpoints (Voyage's compat layer,

@@ -3,7 +3,7 @@ from odoo import fields, models
 
 class OrcAuditLog(models.Model):
     _name = "orc.audit.log"
-    _description = "Odoo Resolution Center provisioning audit log"
+    _description = "AI Workplace provisioning audit log"
     _order = "create_date DESC"
     _rec_name = "action"
 

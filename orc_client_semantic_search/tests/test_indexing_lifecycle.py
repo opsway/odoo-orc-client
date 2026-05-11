@@ -4,6 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
 
+from odoo.addons.orc_client_semantic_search.providers.base import (
+    EmbeddingProviderError,
+)
+
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
 class IndexingLifecycleTests(TransactionCase):
@@ -64,10 +68,6 @@ class IndexingLifecycleTests(TransactionCase):
         self.assertEqual(leftover, 0)
 
     def test_provider_failure_keeps_queue_row_and_increments_attempts(self):
-        from odoo.addons.orc_client_semantic_search.providers.base import (
-            EmbeddingProviderError,
-        )
-
         article = self.env["knowledge.article"].create({
             "name": "Failure test", "body": "<p>x</p>",
         })

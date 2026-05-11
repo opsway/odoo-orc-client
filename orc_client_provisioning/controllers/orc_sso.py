@@ -14,7 +14,7 @@ def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werk
     """Inline-HTML error response. Odoo 18 no longer ships a
     ``web.http_error`` QWeb template, so rendering via xmlid 500s. Keep
     this page dependency-free and styled with inline CSS — the
-    Odoo Resolution Center team can't count on the client's custom
+    AI Workplace team can't count on the client's custom
     theme being sane.
     """
     hint_html = f"<p class='hint'>{escape(hint)}</p>" if hint else ""
@@ -43,7 +43,7 @@ def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werk
 </style>
 </head><body>
   <div class="card">
-    <div class="code">Odoo Resolution Center · {status}</div>
+    <div class="code">AI Workplace · {status}</div>
     <h1>{escape(headline)}</h1>
     {hint_html}
     <details><summary>Technical details</summary><pre>{escape(detail)}</pre></details>
@@ -59,7 +59,7 @@ def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werk
 
 
 def _classify_orc_error(message: str) -> tuple[int, str, str]:
-    """Turn an Odoo Resolution Center HTTP failure into (status, headline, hint).
+    """Turn an AI Workplace HTTP failure into (status, headline, hint).
 
     Status is what we return to the user's browser; hint is a plain-
     language next step so the user doesn't see a raw 401 page and give up.
@@ -68,7 +68,7 @@ def _classify_orc_error(message: str) -> tuple[int, str, str]:
     if "401" in lower or "token required" in lower or "scope required" in lower:
         return (
             403,
-            "The Odoo Resolution Center isn't accepting this Odoo instance right now",
+            "The AI Workplace isn't accepting this Odoo instance right now",
             "The addon's token was revoked or replaced. Ask a consultant to mint a new one, "
             "then paste it into System Parameters → orc.org_token.",
         )
@@ -82,28 +82,29 @@ def _classify_orc_error(message: str) -> tuple[int, str, str]:
     if "404" in lower and "not provisioned" in lower:
         return (
             404,
-            "Your Odoo Resolution Center account isn't set up yet",
-            "Ask an Odoo admin to tick the Automated Odoo Access toggle on your user, or wait for the next provisioning run.",
+            "Your AI Workplace account isn't set up yet",
+            "Ask an Odoo admin to tick the Automated Odoo Access toggle on"
+            " your user, or wait for the next provisioning run.",
         )
     if "failed to reach orc" in lower or "connection" in lower or "timeout" in lower:
         return (
             502,
-            "The Odoo Resolution Center is unreachable",
+            "The AI Workplace is unreachable",
             "Check that the Odoo server can reach the endpoint (orc.endpoint_url) and try again in a moment.",
         )
-    return (502, "Odoo Resolution Center handshake failed", "")
+    return (502, "AI Workplace handshake failed", "")
 
 
 class OrcSsoController(http.Controller):
 
     @http.route("/orc/sso/start", type="http", auth="user", methods=["GET", "POST"], csrf=False)
     def sso_start(self, **_kwargs):
-        """Trigger point for the systray "Open Odoo Resolution Center"
+        """Trigger point for the systray "Open AI Workplace"
         button.
 
         Flow:
           1. Server-to-server: mint a one-time nonce from the
-             Odoo Resolution Center, forwarding the *browser's* UA + IP
+             AI Workplace, forwarding the *browser's* UA + IP
              so it can bind the nonce to the browser that will redeem
              it. (Our own server-to-server UA/IP would never match.)
           2. Return an auto-submitting HTML form that POSTs the nonce
@@ -118,7 +119,7 @@ class OrcSsoController(http.Controller):
         if not user.orc_enabled or not user.orc_user_id:
             return _error_page(
                 403,
-                "This user isn't provisioned in the Odoo Resolution Center",
+                "This user isn't provisioned in the AI Workplace",
                 "Ask an Odoo admin to tick the Automated Odoo Access toggle on your user record.",
             )
 
@@ -157,19 +158,19 @@ class OrcSsoController(http.Controller):
         if not nonce or not url:
             return _error_page(
                 502,
-                "Odoo Resolution Center handshake failed",
-                "The Odoo Resolution Center returned an incomplete SSO payload.",
+                "AI Workplace handshake failed",
+                "The AI Workplace returned an incomplete SSO payload.",
             )
 
         # Auto-submitting form keeps the nonce in the request body, not
         # the URL. target="_top" breaks out of any iframe the systray
         # might be inside (Odoo studio/form embeds).
         html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Opening Odoo Resolution Center…</title></head>
+<html><head><meta charset="utf-8"><title>Opening AI Workplace…</title></head>
 <body onload="document.forms[0].submit()">
   <form method="POST" action="{escape(url)}" target="_top">
     <input type="hidden" name="nonce" value="{escape(nonce)}">
-    <noscript><button type="submit">Continue to Odoo Resolution Center</button></noscript>
+    <noscript><button type="submit">Continue to AI Workplace</button></noscript>
   </form>
 </body></html>"""
         return werkzeug.wrappers.Response(

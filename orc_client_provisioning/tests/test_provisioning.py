@@ -43,7 +43,7 @@ class TestOrcProvisioning(TransactionCase):
         self.user.invalidate_recordset()
         self.assertEqual(self.user.orc_user_id, "orc-uid-1")
         self.assertTrue(self.user.orc_api_key_id)
-        self.assertEqual(self.user.orc_api_key_id.name, "ORC (auto-managed)")
+        self.assertEqual(self.user.orc_api_key_id.name, "AI Workplace (auto-managed)")
         self.assertTrue(self.user.orc_provisioned_at)
         self.assertTrue(self.user.orc_last_rotation_at)
         log = self.env["orc.audit.log"].search([("user_id", "=", self.user.id)], limit=1)

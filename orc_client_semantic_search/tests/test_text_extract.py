@@ -40,8 +40,8 @@ class HtmlStripTests(TransactionCase):
         self.assertIn("beta", out)
         # Not pinning the bullet character — just that each item
         # gets its own line.
-        alpha_line = next(l for l in out.splitlines() if "alpha" in l)
-        beta_line = next(l for l in out.splitlines() if "beta" in l)
+        alpha_line = next(line for line in out.splitlines() if "alpha" in line)
+        beta_line = next(line for line in out.splitlines() if "beta" in line)
         self.assertNotEqual(alpha_line, beta_line)
 
     def test_falsy_inputs_return_empty(self):

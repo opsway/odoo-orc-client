@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <record id="group_orc_manager" model="res.groups">
-        <field name="name">Odoo Resolution Center Manager</field>
+        <field name="name">AI Workplace Manager</field>
         <field name="category_id" ref="base.module_category_administration"/>
-        <field name="comment">Can enable / disable Odoo Resolution Center access for users and inspect the audit log.</field>
+        <field name="comment">Can enable / disable AI Workplace access for users and inspect the audit log.</field>
     </record>
 
     <record id="base.group_system" model="res.groups">

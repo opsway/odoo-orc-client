@@ -1,8 +1,8 @@
 # Agent guidance — `orc_client_semantic_search`
 
 This file is for agents working **on** the module. Runtime-agent
-guidance (when the ORC agent should use `odoo_semantic_search` vs
-`odoo_search_read`) lives in `claude-worker/AGENTS.md` in the ORC
+guidance (when the AI Workplace agent should use `odoo_semantic_search` vs
+`odoo_search_read`) lives in `claude-worker/AGENTS.md` in the AI Workplace
 repo, not here.
 
 ## What this module is
@@ -24,7 +24,7 @@ The full contract is in `README.md`. Read it before making changes.
   permission enforcement layer is the read step downstream.
 - **No gateway dependency for embed or search.** This module calls
   the provider directly, configured per-tenant in Odoo Settings.
-  Any temptation to "centralize embedding through the ORC gateway"
+  Any temptation to "centralize embedding through the AI Workplace gateway"
   has been considered and rejected.
 - **No RAG framework imports.** No LlamaIndex, no LangChain. Pure
   Python + numpy + requests + pypdf.
@@ -106,15 +106,15 @@ enough that a `requests.post` is clearer than a 50MB SDK.
 ## What lives elsewhere
 
 - The new MCP tool definition (`odoo_semantic_search`) and its
-  dispatcher live in **`odoo-mcp/app/main.py`** in the ORC repo,
+  dispatcher live in **`odoo-mcp/app/main.py`** in the AI Workplace repo,
   not here.
 - The activity-line caption ("🔎 Semantic search: …") lives in
-  **`gateway/src/hook_renderer.py`** in the ORC repo.
+  **`gateway/src/hook_renderer.py`** in the AI Workplace repo.
 - The runtime-agent prompt guidance ("when to use semantic_search
   vs odoo_search_read") lives in
-  **`claude-worker/AGENTS.md`** in the ORC repo.
+  **`claude-worker/AGENTS.md`** in the AI Workplace repo.
 
 When making the cross-cutting change, ship the Odoo module first
 and verify it works in isolation (operator can call the method via
-Odoo's developer-mode RPC console). Then ship the ORC-side wiring
+Odoo's developer-mode RPC console). Then ship the AI Workplace-side wiring
 in a separate PR.
