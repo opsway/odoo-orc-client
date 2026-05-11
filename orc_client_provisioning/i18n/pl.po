@@ -261,3 +261,120 @@ msgstr ""
 "Po włączeniu użytkownik zostaje zarejestrowany w AI Workplace, "
 "otrzymuje automatycznie zarządzany klucz API Odoo i widzi ikonę w systrayu "
 "pozwalającą otworzyć jego rozmowy w AI Workplace."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "Technical details"
+msgstr "Szczegóły techniczne"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "← Back to Odoo"
+msgstr "← Powrót do Odoo"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "The AI Workplace isn't accepting this Odoo instance right now"
+msgstr "AI Workplace nie akceptuje teraz tej instancji Odoo"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid ""
+"The addon's token was revoked or replaced. Ask a consultant to mint a new "
+"one, then paste it into System Parameters → orc.org_token."
+msgstr ""
+"Token dodatku został odwołany lub zastąpiony. Poproś konsultanta o "
+"wygenerowanie nowego, a następnie wklej go w Parametrach systemu → "
+"orc.org_token."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "Token is pinned to a different environment"
+msgstr "Token jest przypisany do innego środowiska"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid ""
+"Mint a token for this Odoo instance specifically (stage vs prod tokens are "
+"not interchangeable) and update orc.org_token."
+msgstr ""
+"Wygeneruj token dedykowany tej instancji Odoo (tokeny stage i prod nie są "
+"wymienne) i zaktualizuj orc.org_token."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "Your AI Workplace account isn't set up yet"
+msgstr "Twoje konto AI Workplace nie jest jeszcze skonfigurowane"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid ""
+"Ask an Odoo admin to tick the Automated Odoo Access toggle on your user, or "
+"wait for the next provisioning run."
+msgstr ""
+"Poproś administratora Odoo o włączenie opcji Automated Odoo Access na "
+"Twoim koncie lub poczekaj na następny cykl rejestracji."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "The AI Workplace is unreachable"
+msgstr "AI Workplace jest nieosiągalny"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid ""
+"Check that the Odoo server can reach the endpoint (orc.endpoint_url) and "
+"try again in a moment."
+msgstr ""
+"Sprawdź, czy serwer Odoo ma dostęp do adresu (orc.endpoint_url) i spróbuj "
+"ponownie za chwilę."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "AI Workplace handshake failed"
+msgstr "Połączenie z AI Workplace nie powiodło się"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "This user isn't provisioned in the AI Workplace"
+msgstr "Ten użytkownik nie jest zarejestrowany w AI Workplace"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid ""
+"Ask an Odoo admin to tick the Automated Odoo Access toggle on your user "
+"record."
+msgstr ""
+"Poproś administratora Odoo o włączenie opcji Automated Odoo Access na "
+"Twoim koncie użytkownika."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "The AI Workplace returned an incomplete SSO payload."
+msgstr "AI Workplace zwrócił niekompletne dane SSO."
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "Opening AI Workplace…"
+msgstr "Otwieranie AI Workplace…"
+
+#. module: orc_client_provisioning
+#. odoo-python
+#: code:addons/orc_client_provisioning/controllers/orc_sso.py:0
+msgid "Continue to AI Workplace"
+msgstr "Przejdź do AI Workplace"

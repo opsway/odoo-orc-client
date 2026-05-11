@@ -3,7 +3,7 @@ import logging
 import werkzeug.utils
 from markupsafe import escape
 
-from odoo import http
+from odoo import _, http
 from odoo.exceptions import UserError
 from odoo.http import request
 
@@ -18,6 +18,8 @@ def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werk
     theme being sane.
     """
     hint_html = f"<p class='hint'>{escape(hint)}</p>" if hint else ""
+    tech_details_label = _("Technical details")
+    back_label = _("← Back to Odoo")
     html = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -46,8 +48,8 @@ def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werk
     <div class="code">AI Workplace · {status}</div>
     <h1>{escape(headline)}</h1>
     {hint_html}
-    <details><summary>Technical details</summary><pre>{escape(detail)}</pre></details>
-    <a class="back" href="/web">← Back to Odoo</a>
+    <details><summary>{escape(tech_details_label)}</summary><pre>{escape(detail)}</pre></details>
+    <a class="back" href="/web">{escape(back_label)}</a>
   </div>
 </body></html>"""
     return werkzeug.wrappers.Response(
@@ -68,31 +70,31 @@ def _classify_orc_error(message: str) -> tuple[int, str, str]:
     if "401" in lower or "token required" in lower or "scope required" in lower:
         return (
             403,
-            "The AI Workplace isn't accepting this Odoo instance right now",
-            "The addon's token was revoked or replaced. Ask a consultant to mint a new one, "
-            "then paste it into System Parameters → orc.org_token.",
+            _("The AI Workplace isn't accepting this Odoo instance right now"),
+            _("The addon's token was revoked or replaced. Ask a consultant to mint a new one, "
+              "then paste it into System Parameters → orc.org_token."),
         )
     if "403" in lower and "not authorised for this infrastructure" in lower:
         return (
             403,
-            "Token is pinned to a different environment",
-            "Mint a token for this Odoo instance specifically (stage vs prod tokens are not "
-            "interchangeable) and update orc.org_token.",
+            _("Token is pinned to a different environment"),
+            _("Mint a token for this Odoo instance specifically (stage vs prod tokens are not "
+              "interchangeable) and update orc.org_token."),
         )
     if "404" in lower and "not provisioned" in lower:
         return (
             404,
-            "Your AI Workplace account isn't set up yet",
-            "Ask an Odoo admin to tick the Automated Odoo Access toggle on"
-            " your user, or wait for the next provisioning run.",
+            _("Your AI Workplace account isn't set up yet"),
+            _("Ask an Odoo admin to tick the Automated Odoo Access toggle on"
+              " your user, or wait for the next provisioning run."),
         )
     if "failed to reach orc" in lower or "connection" in lower or "timeout" in lower:
         return (
             502,
-            "The AI Workplace is unreachable",
-            "Check that the Odoo server can reach the endpoint (orc.endpoint_url) and try again in a moment.",
+            _("The AI Workplace is unreachable"),
+            _("Check that the Odoo server can reach the endpoint (orc.endpoint_url) and try again in a moment."),
         )
-    return (502, "AI Workplace handshake failed", "")
+    return (502, _("AI Workplace handshake failed"), "")
 
 
 class OrcSsoController(http.Controller):
@@ -119,8 +121,8 @@ class OrcSsoController(http.Controller):
         if not user.orc_enabled or not user.orc_user_id:
             return _error_page(
                 403,
-                "This user isn't provisioned in the AI Workplace",
-                "Ask an Odoo admin to tick the Automated Odoo Access toggle on your user record.",
+                _("This user isn't provisioned in the AI Workplace"),
+                _("Ask an Odoo admin to tick the Automated Odoo Access toggle on your user record."),
             )
 
         # Capture the browser context BEFORE the server-to-server mint
@@ -158,19 +160,21 @@ class OrcSsoController(http.Controller):
         if not nonce or not url:
             return _error_page(
                 502,
-                "AI Workplace handshake failed",
-                "The AI Workplace returned an incomplete SSO payload.",
+                _("AI Workplace handshake failed"),
+                _("The AI Workplace returned an incomplete SSO payload."),
             )
 
         # Auto-submitting form keeps the nonce in the request body, not
         # the URL. target="_top" breaks out of any iframe the systray
         # might be inside (Odoo studio/form embeds).
+        page_title = _("Opening AI Workplace…")
+        continue_btn = _("Continue to AI Workplace")
         html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Opening AI Workplace…</title></head>
+<html><head><meta charset="utf-8"><title>{escape(page_title)}</title></head>
 <body onload="document.forms[0].submit()">
   <form method="POST" action="{escape(url)}" target="_top">
     <input type="hidden" name="nonce" value="{escape(nonce)}">
-    <noscript><button type="submit">Continue to AI Workplace</button></noscript>
+    <noscript><button type="submit">{escape(continue_btn)}</button></noscript>
   </form>
 </body></html>"""
         return werkzeug.wrappers.Response(
