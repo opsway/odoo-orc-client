@@ -188,12 +188,14 @@ class OrcTasksController(http.Controller):
                 {"ok": False, "error": "invalid_json"},
                 status=400,
             )
-        message = body.get("message")
-        if not isinstance(message, str) or not message.strip():
-            return _json_response(
-                {"ok": False, "error": "message_required"},
-                status=400,
-            )
+        # `message` is optional. The new "+" flow opens the chat
+        # window directly and lets the user type their first
+        # message inside the iframe; legacy callers (or any future
+        # one-shot creation path) can still seed the first message
+        # by sending a non-empty string. Empty / missing / non-
+        # string all coerce to "" for a single canonical wire shape.
+        raw_message = body.get("message")
+        message = raw_message.strip() if isinstance(raw_message, str) else ""
 
         infra_id = body.get("infrastructure_id")
         if not infra_id:
@@ -212,7 +214,7 @@ class OrcTasksController(http.Controller):
                 .create_task(
                     acting_user=user.login,
                     infrastructure_id=infra_id,
-                    message=message.strip(),
+                    message=message,
                 )
             )
         except UserError as exc:

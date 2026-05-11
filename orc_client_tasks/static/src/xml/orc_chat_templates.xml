@@ -39,26 +39,10 @@
                     </button>
                     <button type="button"
                             class="btn btn-sm btn-link o_orc_chat_compose_toggle"
-                            t-on-click="onClickCompose"
-                            t-att-title="ui.composerOpen ? 'Cancel' : 'New chat'">
-                        <i t-att-class="ui.composerOpen ? 'fa fa-times' : 'fa fa-plus'"/>
-                    </button>
-                </div>
-            </div>
-
-            <div t-if="ui.composerOpen" class="o_orc_chat_composer">
-                <textarea t-model="ui.composerText"
-                          t-on-keydown="onComposerKeydown"
-                          placeholder="Describe the issue — the agent will reply in chat."
-                          rows="3"
-                          class="form-control form-control-sm"/>
-                <div class="o_orc_chat_composer_actions">
-                    <button type="button"
-                            class="btn btn-sm btn-primary"
-                            t-on-click="onSubmitCompose"
-                            t-att-disabled="ui.composerBusy or !ui.composerText.trim()">
-                        <span t-if="!ui.composerBusy">Create</span>
-                        <span t-else="">Creating…</span>
+                            t-on-click="onClickNewTask"
+                            t-att-disabled="ui.creatingTask"
+                            title="New chat">
+                        <i t-att-class="ui.creatingTask ? 'fa fa-spinner fa-spin' : 'fa fa-plus'"/>
                     </button>
                 </div>
             </div>

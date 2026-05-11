@@ -40,10 +40,20 @@ class OrcClientTasksExt(models.AbstractModel):
         *,
         acting_user: str,
         infrastructure_id: str,
-        message: str,
+        message: str = "",
     ) -> dict:
-        """POST /api/tasks/create — creates the Matrix room + first
-        message. Returns {ok, room_id}."""
+        """POST /api/tasks/create — creates the Matrix room and,
+        when ``message`` is non-empty, posts it as the first
+        message. Returns ``{ok, room_id}``.
+
+        ``message`` is optional. The "+" popover in the systray
+        opens the chat window directly on click; the user types
+        their first message inside the chat iframe. The ORC server
+        (``orc-app/app/api/tasks/create/route.ts``) already supports
+        the no-first-message path and the agent has no "wait for
+        first message" guard, so an empty room is a usable starting
+        point.
+        """
         return self._request(
             "POST",
             "/api/tasks/create",
