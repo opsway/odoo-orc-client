@@ -121,9 +121,9 @@ class TestOrcProvisioning(TransactionCase):
         # Managed key row on Odoo side is gone.
         self.assertFalse(self.user.orc_api_key_id)
         self.assertFalse(self.env["res.users.apikeys"].search([("id", "=", key_id)]))
-        # ORC was told to revoke BY EMAIL (not by orc_user_id) — the
-        # per-infra endpoint is acting-user-scoped.
-        self.assertEqual(revoke_calls, [{"email": self.user.login}])
+        # ORC was told to revoke using the effective email (same as
+        # provisioning). For alice@acme.test that equals login.
+        self.assertEqual(revoke_calls, [{"email": self.user._orc_effective_email()}])
 
     def test_retick_after_deprovision_reprovisions(self):
         """A₁ round-trip: uncheck then re-check → fresh provisioning
@@ -151,3 +151,53 @@ class TestOrcProvisioning(TransactionCase):
         # being present (write-hook keys off `orc_api_key_id`, not
         # `orc_user_id`, to catch re-enrolment).
         self.assertEqual(len(provision_calls), 1)
+
+    # -- bare-login tests -------------------------------------------------------
+
+    def test_effective_email_with_at_sign_is_unchanged(self):
+        self.assertEqual(
+            self.user._orc_effective_email(),
+            "alice@acme.test",
+        )
+
+    def test_effective_email_bare_login_qualified_with_hostname(self):
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("web.base.url", "https://myco.odoo.com")
+        admin = self.env["res.users"].create({
+            "name": "Admin User",
+            "login": "admin_test_orc",
+        })
+        self.assertEqual(admin._orc_effective_email(), "admin_test_orc@myco.odoo.com")
+
+    def test_provision_bare_login_sends_qualified_email(self):
+        """Bare login users must be provisioned with a qualified email so
+        'admin' on two different Odoo instances does not collide in the gateway."""
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("web.base.url", "https://myco.odoo.com")
+        admin = self.env["res.users"].create({
+            "name": "Admin User",
+            "login": "admin_test_orc",
+        })
+        provision_calls: list[dict] = []
+        push_calls: list[dict] = []
+
+        def capture_provision(**kw):
+            provision_calls.append(kw)
+            return "orc-uid-admin"
+
+        def capture_push(**kw):
+            push_calls.append(kw)
+
+        with self._patch_client(
+            provision_user=capture_provision,
+            push_odoo_key=capture_push,
+        ):
+            admin.orc_enabled = True
+
+        self.assertEqual(len(provision_calls), 1)
+        self.assertEqual(provision_calls[0]["email"], "admin_test_orc@myco.odoo.com")
+
+        self.assertEqual(len(push_calls), 1)
+        # Gateway identity uses qualified email; Odoo API auth uses bare login.
+        self.assertEqual(push_calls[0]["email"], "admin_test_orc@myco.odoo.com")
+        self.assertEqual(push_calls[0]["odoo_login"], "admin_test_orc")
