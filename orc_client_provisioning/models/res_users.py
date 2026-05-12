@@ -467,46 +467,53 @@ class ResUsers(models.Model):
                 })
 
         # Direction B — remote present without a corresponding local
-        # `orc_enabled=True` row. Two sub-cases:
-        #   1. Local user exists with orc_enabled=False → deprovision.
-        #   2. No local user at all → orphan, log only (we don't
-        #      auto-create res.users from the remote list).
+        # `orc_enabled=True` row.
         residual_remote = set(remote_users) - set(local_by_email)
         if residual_remote:
-            # Search previously provisioned disabled users and key by
-            # effective email (not raw login) so bare logins like "admin"
-            # match their qualified gateway identity "admin@hostname".
-            local_disabled_provisioned = self.search([
-                ("orc_enabled", "=", False),
-                ("orc_user_id", "!=", False),
-            ])
-            disabled_by_email = {
-                u._orc_gateway_identity(): u for u in local_disabled_provisioned
-            }
-            for email in residual_remote:
-                user = disabled_by_email.get(email)
-                if user is None:
-                    self.env["orc.audit.log"].sudo().create({
-                        "action": "orphan_remote_user",
-                        "status": "drift",
-                        "error": f"no local res.users for {email}"[:1000],
-                    })
-                    continue
-                try:
-                    client.revoke_infra_access(email=email)
-                    user._orc_stamp_sync("ok", "deprovisioned from AI Workplace")
-                except Exception as exc:
-                    _logger.warning(
-                        "[orc] reconcile deprovision failed for %s: %s",
-                        email, exc,
-                    )
-                    user._orc_stamp_sync("error", f"deprovision failed: {exc}")
-                    self.env["orc.audit.log"].sudo().create({
-                        "user_id": user.id,
-                        "action": "reconcile",
-                        "status": "error",
-                        "error": str(exc)[:1000],
-                    })
+            self._reconcile_revoke_residual(client, residual_remote)
+
+    @api.model
+    def _reconcile_revoke_residual(self, client, residual_remote):
+        """Direction B of the reconcile: remote users with no locally-enabled
+        counterpart. Two sub-cases:
+          1. Local user exists with orc_enabled=False → deprovision.
+          2. No local user at all → orphan, log only (we don't
+             auto-create res.users from the remote list).
+        """
+        # Search previously provisioned disabled users and key by
+        # gateway identity so bare logins like "admin" match their
+        # qualified form "admin@hostname".
+        local_disabled_provisioned = self.search([
+            ("orc_enabled", "=", False),
+            ("orc_user_id", "!=", False),
+        ])
+        disabled_by_email = {
+            u._orc_gateway_identity(): u for u in local_disabled_provisioned
+        }
+        for email in residual_remote:
+            user = disabled_by_email.get(email)
+            if user is None:
+                self.env["orc.audit.log"].sudo().create({
+                    "action": "orphan_remote_user",
+                    "status": "drift",
+                    "error": f"no local res.users for {email}"[:1000],
+                })
+                continue
+            try:
+                client.revoke_infra_access(email=email)
+                user._orc_stamp_sync("ok", "deprovisioned from AI Workplace")
+            except Exception as exc:
+                _logger.warning(
+                    "[orc] reconcile deprovision failed for %s: %s",
+                    email, exc,
+                )
+                user._orc_stamp_sync("error", f"deprovision failed: {exc}")
+                self.env["orc.audit.log"].sudo().create({
+                    "user_id": user.id,
+                    "action": "reconcile",
+                    "status": "error",
+                    "error": str(exc)[:1000],
+                })
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
