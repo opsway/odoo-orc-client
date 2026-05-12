@@ -134,7 +134,7 @@ class OrcSsoController(http.Controller):
 
         try:
             data = request.env["orc.client"].sudo().mint_sso_nonce(
-                email=user._orc_effective_email(),
+                email=user._orc_gateway_identity(),
                 browser_user_agent=browser_ua,
                 browser_ip=browser_ip,
             )

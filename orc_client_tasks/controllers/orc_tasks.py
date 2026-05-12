@@ -77,7 +77,7 @@ class OrcTasksController(http.Controller):
             data = (
                 request.env["orc.client"]
                 .sudo()
-                .list_my_tasks(acting_user=user._orc_effective_email())
+                .list_my_tasks(acting_user=user._orc_gateway_identity())
             )
         except UserError as exc:
             _logger.info("AI Workplace list_my_tasks failed: %s", exc)
@@ -151,7 +151,7 @@ class OrcTasksController(http.Controller):
                 request.env["orc.client"]
                 .sudo()
                 .mint_sso_nonce(
-                    email=user._orc_effective_email(),
+                    email=user._orc_gateway_identity(),
                     return_to=return_to,
                     browser_user_agent=browser_ua,
                     browser_ip=browser_ip,
@@ -223,7 +223,7 @@ class OrcTasksController(http.Controller):
                 request.env["orc.client"]
                 .sudo()
                 .create_task(
-                    acting_user=user._orc_effective_email(),
+                    acting_user=user._orc_gateway_identity(),
                     infrastructure_id=infra_id,
                     message=message,
                 )
@@ -274,7 +274,7 @@ class OrcTasksController(http.Controller):
             data = (
                 request.env["orc.client"]
                 .sudo()
-                .mint_sso_nonce(email=user._orc_effective_email(), return_to=return_to)
+                .mint_sso_nonce(email=user._orc_gateway_identity(), return_to=return_to)
             )
         except UserError as exc:
             _logger.info("AI Workplace mint_sso_nonce (open-in-orc) failed: %s", exc)
