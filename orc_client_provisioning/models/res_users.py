@@ -427,11 +427,27 @@ class ResUsers(models.Model):
             for u in data.get("users", [])
             if u.get("email")
         }
-        local_by_email = {u._orc_gateway_identity(): u for u in local_enabled}
+        # Build local index keyed by gateway identity.  For users that
+        # have not yet had orc_gateway_email populated (provisioned before
+        # this field existed), also register the computed effective email
+        # as a secondary candidate so the heal write below can find them
+        # regardless of which form the gateway actually stored.
+        local_by_email = {}
+        for u in local_enabled:
+            gw_id = u._orc_gateway_identity()   # orc_gateway_email or login
+            local_by_email[gw_id] = u
+            if not u.orc_gateway_email:
+                eff = u._orc_effective_email()
+                if eff != gw_id:
+                    local_by_email.setdefault(eff, u)
 
         # Direction A — local enabled, sync forward.
         for email, user in local_by_email.items():
             if email in remote_users:
+                # Heal: persist the confirmed gateway email so all future
+                # calls (revoke, SSO, tasks) use the stable stored value.
+                if not user.orc_gateway_email:
+                    user.sudo().write({"orc_gateway_email": email})
                 user._orc_stamp_sync("ok", "in sync")
                 continue
             try:

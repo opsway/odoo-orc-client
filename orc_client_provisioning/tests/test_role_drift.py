@@ -279,6 +279,72 @@ class TestReconcileDrift(TransactionCase):
     # that compose the work above; smoke-test them once each so a
     # rename in res_users.py can't silently break the ir.cron XML.
 
+    # ---- orc_gateway_email healing ----------------------------------------
+
+    def _make_bare_login_user(self, login="admin_test_heal"):
+        """Create a user with a bare (non-email) login, provision them,
+        then clear orc_gateway_email to simulate the pre-fix state."""
+        user = self.env["res.users"].create({"name": "Bare Login", "login": login})
+        with patch.multiple(
+            self.env["orc.client"],
+            provision_user=lambda **kw: "orc-uid-bare",
+            push_odoo_key=lambda **kw: None,
+        ):
+            user.orc_enabled = True
+        user.sudo().write({"orc_gateway_email": False})
+        user.invalidate_recordset()
+        return user
+
+    def test_reconcile_heals_gateway_email_bare_login_form(self):
+        """When the gateway still has the user under their bare login
+        ('admin'), the reconcile must write that bare login into
+        orc_gateway_email so revoke and SSO use the correct identity."""
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("web.base.url", "https://myco.odoo.com")
+        bare = self._make_bare_login_user()
+        self.assertFalse(bare.orc_gateway_email)
+
+        with patch.multiple(
+            self.env["orc.client"],
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user"},
+                    {"email": bare.login, "role": "user"},   # bare form
+                ],
+                "infrastructures": [],
+            },
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        bare.invalidate_recordset()
+        self.assertEqual(bare.orc_gateway_email, bare.login)
+
+    def test_reconcile_heals_gateway_email_qualified_form(self):
+        """When the gateway already has the user under their qualified email
+        ('admin@myco.odoo.com') — e.g. after a key rotation with the first
+        fix commit — the reconcile must find them via the secondary candidate
+        and heal orc_gateway_email to the qualified form."""
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("web.base.url", "https://myco.odoo.com")
+        bare = self._make_bare_login_user()
+        self.assertFalse(bare.orc_gateway_email)
+        qualified = bare._orc_effective_email()   # "admin_test_heal@myco.odoo.com"
+
+        with patch.multiple(
+            self.env["orc.client"],
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user"},
+                    {"email": qualified, "role": "user"},   # qualified form
+                ],
+                "infrastructures": [],
+            },
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        bare.invalidate_recordset()
+        self.assertEqual(bare.orc_gateway_email, qualified)
+
     def test_cron_orc_sync_runs_reconcile(self):
         with patch.multiple(
             self.env["orc.client"],
