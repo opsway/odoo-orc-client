@@ -76,6 +76,18 @@ class ResUsers(models.Model):
         readonly=True,
         copy=False,
     )
+    orc_gateway_email = fields.Char(
+        string="Gateway email",
+        readonly=True,
+        copy=False,
+        help=(
+            "The email address under which this user is registered in the "
+            "AI Workplace gateway (set at first provision). May differ from "
+            "login for bare-login accounts (e.g. 'admin'). Used for all "
+            "subsequent gateway calls (revoke, SSO, tasks) so that the "
+            "identity stays stable even if the qualification logic changes."
+        ),
+    )
 
     @api.depends("groups_id")
     def _compute_orc_is_manager(self):
@@ -110,6 +122,21 @@ class ResUsers(models.Model):
         base_url = (icp.get_param("web.base.url") or "").strip().rstrip("/")
         hostname = urlparse(base_url).hostname or "odoo.localhost"
         return f"{login}@{hostname}"
+
+    def _orc_gateway_identity(self) -> str:
+        """Return the email the gateway already knows this user by.
+
+        Uses the stored ``orc_gateway_email`` (written at first provision).
+        Falls back to raw ``login`` for users provisioned before
+        ``orc_gateway_email`` was introduced — the gateway still holds
+        them under their bare login (e.g. ``"admin"``).
+
+        Use this for every operation against an already-provisioned user
+        (revoke, SSO, tasks, reconcile). Use ``_orc_effective_email()``
+        only when creating/updating the gateway registration.
+        """
+        self.ensure_one()
+        return self.orc_gateway_email or self.login
 
     def _orc_desired_role(self) -> str:
         """The addon only provisions ``member`` — admin promotion
@@ -230,6 +257,7 @@ class ResUsers(models.Model):
                 "orc_api_key_id": new_key_row.id,
                 "orc_provisioned_at": user.orc_provisioned_at or now,
                 "orc_last_rotation_at": now,
+                "orc_gateway_email": eff_email,
             })
 
             self.env["orc.audit.log"].sudo().create({
@@ -258,7 +286,7 @@ class ResUsers(models.Model):
                 continue
             client = self.env["orc.client"]
             try:
-                client.revoke_infra_access(email=user._orc_effective_email())
+                client.revoke_infra_access(email=user._orc_gateway_identity())
             except UserError as exc:
                 self.env["orc.audit.log"].sudo().create({
                     "user_id": user.id,
@@ -399,7 +427,7 @@ class ResUsers(models.Model):
             for u in data.get("users", [])
             if u.get("email")
         }
-        local_by_email = {u._orc_effective_email(): u for u in local_enabled}
+        local_by_email = {u._orc_gateway_identity(): u for u in local_enabled}
 
         # Direction A — local enabled, sync forward.
         for email, user in local_by_email.items():
@@ -437,7 +465,7 @@ class ResUsers(models.Model):
                 ("orc_user_id", "!=", False),
             ])
             disabled_by_email = {
-                u._orc_effective_email(): u for u in local_disabled_provisioned
+                u._orc_gateway_identity(): u for u in local_disabled_provisioned
             }
             for email in residual_remote:
                 user = disabled_by_email.get(email)

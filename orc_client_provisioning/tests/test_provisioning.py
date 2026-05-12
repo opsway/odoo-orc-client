@@ -119,9 +119,9 @@ class TestOrcProvisioning(TransactionCase):
         # Managed key row on Odoo side is gone.
         self.assertFalse(self.user.orc_api_key_id)
         self.assertFalse(self.env["res.users.apikeys"].search([("id", "=", key_id)]))
-        # ORC was told to revoke using the effective email (same as
-        # provisioning). For alice@acme.test that equals login.
-        self.assertEqual(revoke_calls, [{"email": self.user._orc_effective_email()}])
+        # ORC was told to revoke using the gateway identity (orc_gateway_email
+        # stored at provision time). For alice@acme.test it equals login.
+        self.assertEqual(revoke_calls, [{"email": self.user._orc_gateway_identity()}])
 
     def test_retick_after_deprovision_reprovisions(self):
         """A₁ round-trip: uncheck then re-check → fresh provisioning
@@ -151,6 +151,28 @@ class TestOrcProvisioning(TransactionCase):
         self.assertEqual(len(provision_calls), 1)
 
     # -- bare-login tests -------------------------------------------------------
+
+    def test_gateway_identity_falls_back_to_login_when_no_stored_email(self):
+        """Users provisioned before orc_gateway_email was introduced have no
+        stored email. _orc_gateway_identity() must return the raw login so
+        revoke/SSO/tasks still reach the gateway identity they were registered under."""
+        self.assertFalse(self.user.orc_gateway_email)
+        self.assertEqual(self.user._orc_gateway_identity(), "alice@acme.test")
+
+    def test_gateway_identity_uses_stored_email_after_provision(self):
+        """After provisioning, orc_gateway_email is set and _orc_gateway_identity
+        returns it — even if the effective email computation would differ."""
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("web.base.url", "https://myco.odoo.com")
+        admin = self.env["res.users"].create({
+            "name": "Admin User",
+            "login": "admin_test_orc",
+        })
+        with self._patch_client():
+            admin.orc_enabled = True
+        admin.invalidate_recordset()
+        self.assertEqual(admin.orc_gateway_email, "admin_test_orc@myco.odoo.com")
+        self.assertEqual(admin._orc_gateway_identity(), "admin_test_orc@myco.odoo.com")
 
     def test_effective_email_with_at_sign_is_unchanged(self):
         self.assertEqual(
