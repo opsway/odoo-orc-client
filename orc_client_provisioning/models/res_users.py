@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlparse
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -87,6 +88,29 @@ class ResUsers(models.Model):
 
     # --- Provisioning lifecycle ------------------------------------------------
 
+    def _orc_effective_email(self) -> str:
+        """Return a gateway-safe, globally-unique email for this user.
+
+        Odoo allows non-email logins (e.g. the built-in ``admin``
+        account). The gateway deduplicates users globally on email, so
+        passing ``login = "admin"`` from two different Odoo instances
+        collides on the same gateway user row, giving one AI Workplace
+        identity access to both organisations.
+
+        When ``login`` already contains ``@`` it is returned unchanged.
+        Otherwise we qualify it with the Odoo instance's public hostname
+        (from ``web.base.url``), e.g. ``"admin"`` on
+        ``https://myco.odoo.com`` → ``"admin@myco.odoo.com"``.
+        """
+        self.ensure_one()
+        login = self.login
+        if "@" in login:
+            return login
+        icp = self.env["ir.config_parameter"].sudo()
+        base_url = (icp.get_param("web.base.url") or "").strip().rstrip("/")
+        hostname = urlparse(base_url).hostname or "odoo.localhost"
+        return f"{login}@{hostname}"
+
     def _orc_desired_role(self) -> str:
         """The addon only provisions ``member`` — admin promotion
         happens in the AI Workplace dashboard, not here. The
@@ -170,8 +194,9 @@ class ResUsers(models.Model):
                 # is idempotent on the AI Workplace side, so calling it on
                 # every run keeps role in sync.
                 desired_role = user._orc_desired_role()
+                eff_email = user._orc_effective_email()
                 orc_uid = client.provision_user(
-                    email=user.login,
+                    email=eff_email,
                     name=user.name or user.login,
                     role=desired_role,
                 )
@@ -182,13 +207,11 @@ class ResUsers(models.Model):
                 # encrypted; the agent will use it to call Odoo
                 # tools as this user.
                 client.push_odoo_key(
-                    email=user.login,
+                    email=eff_email,
                     api_key=new_raw_key,
-                    # On records where login != email (e.g. the
-                    # built-in ``admin`` user), AI Workplace needs
-                    # this to stamp Odoo writes with the right
-                    # identity rather than defaulting to the caller's
-                    # email.
+                    # Always pass odoo_login explicitly: eff_email may be
+                    # qualified (e.g. "admin@myco.odoo.com") and differ from
+                    # the real Odoo login that authenticates API calls.
                     odoo_login=user.login,
                 )
             except Exception:
@@ -235,7 +258,7 @@ class ResUsers(models.Model):
                 continue
             client = self.env["orc.client"]
             try:
-                client.revoke_infra_access(email=user.login)
+                client.revoke_infra_access(email=user._orc_effective_email())
             except UserError as exc:
                 self.env["orc.audit.log"].sudo().create({
                     "user_id": user.id,
@@ -376,7 +399,7 @@ class ResUsers(models.Model):
             for u in data.get("users", [])
             if u.get("email")
         }
-        local_by_email = {u.login: u for u in local_enabled}
+        local_by_email = {u._orc_effective_email(): u for u in local_enabled}
 
         # Direction A — local enabled, sync forward.
         for email, user in local_by_email.items():
@@ -406,11 +429,16 @@ class ResUsers(models.Model):
         #      auto-create res.users from the remote list).
         residual_remote = set(remote_users) - set(local_by_email)
         if residual_remote:
-            local_disabled_matches = self.search([
-                ("login", "in", list(residual_remote)),
+            # Search previously provisioned disabled users and key by
+            # effective email (not raw login) so bare logins like "admin"
+            # match their qualified gateway identity "admin@hostname".
+            local_disabled_provisioned = self.search([
                 ("orc_enabled", "=", False),
+                ("orc_user_id", "!=", False),
             ])
-            disabled_by_email = {u.login: u for u in local_disabled_matches}
+            disabled_by_email = {
+                u._orc_effective_email(): u for u in local_disabled_provisioned
+            }
             for email in residual_remote:
                 user = disabled_by_email.get(email)
                 if user is None:
