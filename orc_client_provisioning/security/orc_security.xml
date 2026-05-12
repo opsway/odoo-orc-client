@@ -5,8 +5,4 @@
         <field name="category_id" ref="base.module_category_administration"/>
         <field name="comment">Can enable / disable AI Workplace access for users and inspect the audit log.</field>
     </record>
-
-    <record id="base.group_system" model="res.groups">
-        <field name="implied_ids" eval="[(4, ref('orc_client_provisioning.group_orc_manager'))]"/>
-    </record>
 </odoo>
