@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Tasks",
-    "version": "18.0.0.7.3",
+    "version": "15.0.0.7.3",
     "summary": (
         "In-Odoo chat dock for AI Workplace: task-list systray + Discuss-style"
         " foldable windows embedding AI Workplace chat via SSO."
@@ -40,6 +40,8 @@ now; see docs/orc-client-tasks-roadmap.md in the parent repo).
             "orc_client_tasks/static/src/js/orc_chat_dock.js",
             "orc_client_tasks/static/src/js/orc_task_list_popover.js",
             "orc_client_tasks/static/src/js/orc_systray_override.js",
+        ],
+        "web.assets_qweb": [
             "orc_client_tasks/static/src/xml/orc_chat_templates.xml",
         ],
     },

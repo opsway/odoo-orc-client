@@ -1,8 +1,10 @@
 /** @odoo-module **/
 
-import { Component, useState } from "@odoo/owl";
-import { useService } from "@web/core/utils/hooks";
-import { computeIsUnread } from "./orc_chat_service";
+import { useBus, useService } from "@web/core/utils/hooks";
+import { computeIsUnread, ORC_CHAT_UPDATE } from "./orc_chat_service";
+
+const { Component } = owl;
+const { useState } = owl.hooks;
 
 /**
  * List of the user's AI Workplace tasks, grouped by status. Rendered inside
@@ -20,19 +22,16 @@ import { computeIsUnread } from "./orc_chat_service";
  * a picker is Phase 2c territory.
  */
 export class OrcTaskListPopover extends Component {
-    static template = "orc_client_tasks.OrcTaskListPopover";
-    static props = {
-        /** Called after a task is picked so the parent can close the dropdown. */
-        onPicked: { type: Function, optional: true },
-    };
-
     setup() {
         this.orcChat = useService("orc_chat");
         this.notification = useService("notification");
-        // See orc_chat_dock.js — useState() on the service reactive is
-        // what actually subscribes this component to re-renders when
-        // the shared state (tasks list, unread markers) mutates.
-        this.state = useState(this.orcChat.state);
+        // Owl 1 — bump tick on every service update so the tasks getter
+        // re-runs and the unread predicate re-evaluates against fresh
+        // `orcChat.state.lastViewed`.
+        this._render = useState({ tick: 0 });
+        useBus(this.orcChat.bus, ORC_CHAT_UPDATE, () => {
+            this._render.tick++;
+        });
         // Local-only component state: in-flight guard so a
         // double-click on "+" doesn't spawn two empty rooms.
         this.ui = useState({
@@ -43,7 +42,7 @@ export class OrcTaskListPopover extends Component {
     get tasks() {
         // Active first, then closed. Inside each group: most-recently-
         // active at the top.
-        const items = [...this.state.tasks];
+        const items = [...this.orcChat.state.tasks];
         items.sort((a, b) => {
             const sa = (a.status === "closed") ? 1 : 0;
             const sb = (b.status === "closed") ? 1 : 0;
@@ -74,10 +73,7 @@ export class OrcTaskListPopover extends Component {
     }
 
     isUnread(task) {
-        // Read lastViewed via this.state (useState-subscribed) so dots
-        // update without a service-call indirection bypassing the
-        // component's reactive observer.
-        return computeIsUnread(task, this.state.lastViewed);
+        return computeIsUnread(task, this.orcChat.state.lastViewed);
     }
 
     onClickTask(task) {
@@ -110,3 +106,4 @@ export class OrcTaskListPopover extends Component {
         }
     }
 }
+OrcTaskListPopover.template = "orc_client_tasks.OrcTaskListPopover";

@@ -1,9 +1,11 @@
 /** @odoo-module **/
 
-import { Component, onMounted, useEffect, useRef, useState } from "@odoo/owl";
-import { useService } from "@web/core/utils/hooks";
+import { useBus, useEffect, useService } from "@web/core/utils/hooks";
 import { _t } from "@web/core/l10n/translation";
-import { computeIsUnread } from "./orc_chat_service";
+import { computeIsUnread, ORC_CHAT_UPDATE } from "./orc_chat_service";
+
+const { Component } = owl;
+const { onMounted, useRef, useState } = owl.hooks;
 
 /**
  * Single chat window: header (title + fold + close) + iframe body.
@@ -15,17 +17,16 @@ import { computeIsUnread } from "./orc_chat_service";
  * the React SDK extraction.
  */
 export class OrcChatWindow extends Component {
-    static template = "orc_client_tasks.OrcChatWindow";
-    static props = {
-        roomId: { type: String },
-        folded: { type: Boolean },
-    };
-
     setup() {
         this.orcChat = useService("orc_chat");
-        // Subscribe to the shared service reactive so the title/unread
-        // reflect live task-list updates (see orc_chat_dock.js).
-        this.state = useState(this.orcChat.state);
+        // Owl 1 has no `reactive()`. Bump `_render.tick` on service
+        // updates so the title/unread getters re-evaluate; we read
+        // fresh state from `this.orcChat.state` at template time.
+        this._render = useState({ tick: 0 });
+        useBus(this.orcChat.bus, ORC_CHAT_UPDATE, () => {
+            this._render.tick++;
+        });
+
         this.iframeRef = useRef("iframe");
         this.formRef = useRef("form");
         this.ui = useState({
@@ -43,7 +44,7 @@ export class OrcChatWindow extends Component {
         });
 
         this._submitted = false;
-        // OWL patches the DOM asynchronously after a reactive write.
+        // OWL patches the DOM asynchronously after a useState write.
         // Submitting the form from an rAF scheduled inside _startHandshake
         // raced the patch: the form only renders once ui.ssoUrl + ssoNonce
         // are set, and formRef.el was null when rAF fired, so form.submit()
@@ -113,7 +114,7 @@ export class OrcChatWindow extends Component {
     }
 
     get task() {
-        return this.state.tasks.find((t) => t.room_id === this.props.roomId);
+        return this.orcChat.state.tasks.find((t) => t.room_id === this.props.roomId);
     }
 
     get title() {
@@ -125,7 +126,7 @@ export class OrcChatWindow extends Component {
 
     get unread() {
         const t = this.task;
-        return t ? computeIsUnread(t, this.state.lastViewed) : false;
+        return t ? computeIsUnread(t, this.orcChat.state.lastViewed) : false;
     }
 
     /**
@@ -140,3 +141,4 @@ export class OrcChatWindow extends Component {
         return this.props.folded ? _t("Unfold") : _t("Fold");
     }
 }
+OrcChatWindow.template = "orc_client_tasks.OrcChatWindow";

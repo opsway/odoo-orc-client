@@ -6,7 +6,9 @@ from odoo import api, models
 _logger = logging.getLogger(__name__)
 
 
-# Hooks `create`, `write`, and `unlink` on `knowledge.article`.
+# Hooks `create`, `write`, and `unlink` on `document.page` (OCA
+# `knowledge` repo's main wiki model — the v15 stand-in for what
+# was `knowledge.article` upstream).
 #
 # - create: always enqueue. The cron will hash-skip if the body is
 #   identical to a vector that was somehow already there
@@ -17,8 +19,8 @@ _logger = logging.getLogger(__name__)
 #   here saves the queue churn.
 # - unlink: drop the embedding row. Stale ids in the index would
 #   surface as 404s the moment the agent tries to read them.
-class KnowledgeArticle(models.Model):
-    _inherit = "knowledge.article"
+class DocumentPage(models.Model):
+    _inherit = "document.page"
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -34,13 +36,13 @@ class KnowledgeArticle(models.Model):
         # back to the safe choice of always enqueueing.
         cfg = self.env["orc.embedding.config"].search([
             ("is_global", "=", False),
-            ("model_name", "=", "knowledge.article"),
+            ("model_name", "=", "document.page"),
             ("enabled", "=", True),
         ], limit=1)
         if not cfg:
             return result
 
-        watched_field = cfg.text_field_path or "body"
+        watched_field = cfg.text_field_path or "content"
         if watched_field in vals:
             self._orc_enqueue_reindex()
         return result
@@ -51,11 +53,11 @@ class KnowledgeArticle(models.Model):
         ids = self.ids
         if ids:
             Embedding.search([
-                ("model", "=", "knowledge.article"),
+                ("model", "=", "document.page"),
                 ("res_id", "in", ids),
             ]).unlink()
             Queue.search([
-                ("model", "=", "knowledge.article"),
+                ("model", "=", "document.page"),
                 ("res_id", "in", ids),
             ]).unlink()
         return super().unlink()
@@ -68,12 +70,12 @@ class KnowledgeArticle(models.Model):
             return
         Queue = self.env["orc.embedding.queue"]
         existing = Queue.search([
-            ("model", "=", "knowledge.article"),
+            ("model", "=", "document.page"),
             ("res_id", "in", self.ids),
         ])
         existing_ids = set(existing.mapped("res_id"))
         to_create = [
-            {"model": "knowledge.article", "res_id": rec.id}
+            {"model": "document.page", "res_id": rec.id}
             for rec in self
             if rec.id not in existing_ids
         ]

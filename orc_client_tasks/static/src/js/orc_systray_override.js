@@ -1,11 +1,13 @@
 /** @odoo-module **/
 
-import { Component, useState } from "@odoo/owl";
 import { registry } from "@web/core/registry";
-import { useService } from "@web/core/utils/hooks";
+import { useBus, useService } from "@web/core/utils/hooks";
 import { session } from "@web/session";
 import { OrcTaskListPopover } from "./orc_task_list_popover";
-import { computeIsUnread } from "./orc_chat_service";
+import { computeIsUnread, ORC_CHAT_UPDATE } from "./orc_chat_service";
+
+const { Component } = owl;
+const { useState } = owl.hooks;
 
 /**
  * Replaces orc_client_provisioning's single-action "Open AI Workplace" systray
@@ -20,16 +22,14 @@ import { computeIsUnread } from "./orc_chat_service";
  * its original behavior.
  */
 export class OrcSystrayWithTasks extends Component {
-    static template = "orc_client_tasks.OrcSystrayWithTasks";
-    static props = {};
-    static components = { OrcTaskListPopover };
-
     setup() {
         this.orcChat = useService("orc_chat");
-        // See orc_chat_dock.js — useState() subscribes this component
-        // to the shared service reactive so the badge count updates
-        // when tasks / last-viewed mutate.
-        this.state = useState(this.orcChat.state);
+        // Owl 1 — bump tick on every service update so the badge re-renders
+        // when tasks / lastViewed mutate.
+        this._render = useState({ tick: 0 });
+        useBus(this.orcChat.bus, ORC_CHAT_UPDATE, () => {
+            this._render.tick++;
+        });
         this.ui = useState({ dropdownOpen: false });
         this._onDocClick = this._onDocClick.bind(this);
     }
@@ -39,12 +39,9 @@ export class OrcSystrayWithTasks extends Component {
     }
 
     get unreadCount() {
-        // Reads go through `this.state` so the badge re-renders when
-        // tasks/lastViewed mutate — the service's own isUnread() closes
-        // over its original reactive and wouldn't notify this component.
         let n = 0;
-        for (const t of this.state.tasks) {
-            if (computeIsUnread(t, this.state.lastViewed)) n++;
+        for (const t of this.orcChat.state.tasks) {
+            if (computeIsUnread(t, this.orcChat.state.lastViewed)) n++;
         }
         return n;
     }
@@ -61,7 +58,7 @@ export class OrcSystrayWithTasks extends Component {
         if (this.ui.dropdownOpen) {
             // Refresh on open so the list is never stale (poll is 60s,
             // user clicking the icon is a strong cue they want a fresh
-            // view). Fire-and-forget — the service updates reactive state.
+            // view). Fire-and-forget — the service notifies via its bus.
             this.orcChat.refreshTasks();
             window.requestAnimationFrame(() => {
                 document.addEventListener("click", this._onDocClick);
@@ -83,12 +80,19 @@ export class OrcSystrayWithTasks extends Component {
         document.removeEventListener("click", this._onDocClick);
     }
 }
+OrcSystrayWithTasks.template = "orc_client_tasks.OrcSystrayWithTasks";
+OrcSystrayWithTasks.components = { OrcTaskListPopover };
 
 // `force: true` replaces the entry registered by orc_client_provisioning
 // under the same key. Same sequence (100) so the icon position in the
 // systray doesn't shift when the tasks addon is installed/uninstalled.
+// `isDisplayed` matches the provisioning entry's gate so non-enrolled
+// users see no icon at all (vs. an empty button shell).
 registry.category("systray").add(
     "orc_client_provisioning.OrcSystray",
-    { Component: OrcSystrayWithTasks },
+    {
+        Component: OrcSystrayWithTasks,
+        isDisplayed: () => Boolean(session.orc_enabled),
+    },
     { force: true, sequence: 100 },
 );

@@ -1,9 +1,10 @@
 /** @odoo-module **/
 
 import { registry } from "@web/core/registry";
-import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { session } from "@web/session";
+
+const { EventBus } = owl.core;
 
 /**
  * Shared state + actions for the AI Workplace chat dock.
@@ -13,9 +14,12 @@ import { session } from "@web/session";
  * localStorage so fresh page loads keep the dock state and the
  * unread dots stay accurate).
  *
- * Components access via `useService("orc_chat")`. The returned
- * object has a `.state` that is a plain OWL reactive; mutating it
- * re-renders any component that read its fields.
+ * Components access via `useService("orc_chat")`. Owl 1 (Odoo v15) has
+ * no `reactive()` primitive, so the service keeps plain state and
+ * publishes an EventBus tick after every mutation. Components subscribe
+ * with `useBus(orcChat.bus, "update", ...)` and bump their local
+ * `useState` to trigger a re-render — getters read fresh values from
+ * `orcChat.state` at template time.
  *
  * Deliberately not tied to Odoo's RPC layer — our controllers are
  * plain HTTP+JSON, not JSON-RPC.
@@ -35,6 +39,10 @@ export const MAX_VISIBLE_WINDOWS = 3;
 // badge lags by at most this long; the shared-SSE rework in Phase 2b
 // replaces this with push.
 const POLL_MS = 60_000;
+
+// Event name on the service's bus. Components subscribe with
+// `useBus(orcChat.bus, ORC_CHAT_UPDATE, ...)`.
+export const ORC_CHAT_UPDATE = "orc_chat:update";
 
 function readJson(key, fallback) {
     try {
@@ -63,10 +71,8 @@ function parseIso(s) {
 }
 
 /** Standalone unread predicate — takes the state fields explicitly so
- *  callers who read them through their *own* `useState`-subscribed view
- *  stay reactive. The previous service-closure version read state via
- *  the service's original reactive reference, which bypassed each
- *  component's subscription and left badges stale. */
+ *  callers who read them through their own subscription stay reactive
+ *  without depending on closure capture of the service's state object. */
 export function computeIsUnread(task, lastViewed) {
     const activity = parseIso(task.last_activity);
     if (!activity) return false;
@@ -78,15 +84,19 @@ const orcChatService = {
     dependencies: ["notification"],
 
     start(env, { notification }) {
-        // `state` is what components read. Mutations are picked up by
-        // OWL's reactive tracker.
-        const state = reactive({
+        // `state` is read by components through `orcChat.state`. After
+        // every mutation we `bus.trigger(ORC_CHAT_UPDATE)`; subscribers
+        // bump a local `useState` to re-render. Owl 1 has no reactive()
+        // proxy so this is the established v15 pattern.
+        const state = {
             tasks: [],                                           // [{room_id, name, last_activity, ...}]
             openWindows: readJson(LS_OPEN_KEY, []),              // [{room_id, folded}]
             lastViewed: readJson(LS_LAST_VIEWED_KEY, {}),        // {room_id: isoTimestamp}
             loading: false,
             lastError: null,
-        });
+        };
+        const bus = new EventBus();
+        const notify = () => bus.trigger(ORC_CHAT_UPDATE);
 
         let pollHandle = null;
 
@@ -95,6 +105,7 @@ const orcChatService = {
         async function refreshTasks() {
             if (!session.orc_enabled) return;
             state.loading = true;
+            notify();
             try {
                 const res = await fetch("/orc/tasks/list", {
                     credentials: "same-origin",
@@ -110,6 +121,7 @@ const orcChatService = {
                 state.lastError = String(err);
             } finally {
                 state.loading = false;
+                notify();
             }
         }
 
@@ -140,11 +152,13 @@ const orcChatService = {
             }
             markViewed(roomId);
             writeJson(LS_OPEN_KEY, state.openWindows);
+            notify();
         }
 
         function closeWindow(roomId) {
             state.openWindows = state.openWindows.filter((w) => w.room_id !== roomId);
             writeJson(LS_OPEN_KEY, state.openWindows);
+            notify();
         }
 
         function toggleFold(roomId) {
@@ -154,6 +168,7 @@ const orcChatService = {
             // Unfolding counts as "looking at it again".
             if (!w.folded) markViewed(roomId);
             writeJson(LS_OPEN_KEY, state.openWindows);
+            notify();
         }
 
         function markViewed(roomId) {
@@ -162,6 +177,7 @@ const orcChatService = {
                 [roomId]: new Date().toISOString(),
             };
             writeJson(LS_LAST_VIEWED_KEY, state.lastViewed);
+            notify();
         }
 
         // Unread heuristic: task.last_activity > lastViewed[room_id].
@@ -242,6 +258,7 @@ const orcChatService = {
 
         return {
             state,
+            bus,
             // queries
             isUnread,
             unreadCount,

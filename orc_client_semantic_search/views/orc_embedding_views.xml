@@ -15,7 +15,7 @@
         <field name="model">orc.embedding.config</field>
         <field name="arch" type="xml">
             <form string="AI Semantic Search Config">
-                <header invisible="not is_global">
+                <header attrs="{'invisible': [('is_global', '=', False)]}">
                     <button name="action_test_provider"
                             type="object"
                             string="Test provider"
@@ -28,7 +28,7 @@
                 </header>
                 <sheet>
                     <field name="is_global" invisible="1"/>
-                    <group invisible="not is_global" string="Provider">
+                    <group attrs="{'invisible': [('is_global', '=', False)]}" string="Provider">
                         <field name="provider_kind"/>
                         <field name="provider_url"/>
                         <field name="provider_api_key" password="True"/>
@@ -37,7 +37,7 @@
                         <field name="cron_interval_minutes"/>
                         <field name="daily_token_cap"/>
                     </group>
-                    <group invisible="is_global" string="Indexed model">
+                    <group attrs="{'invisible': [('is_global', '=', True)]}" string="Indexed model">
                         <field name="model_name"/>
                         <field name="enabled"/>
                         <field name="text_field_path"/>
@@ -48,25 +48,25 @@
         </field>
     </record>
 
-    <record id="view_orc_embedding_config_list" model="ir.ui.view">
-        <field name="name">orc.embedding.config.list</field>
+    <record id="view_orc_embedding_config_tree" model="ir.ui.view">
+        <field name="name">orc.embedding.config.tree</field>
         <field name="model">orc.embedding.config</field>
         <field name="arch" type="xml">
-            <list string="AI Semantic Search Config">
+            <tree string="AI Semantic Search Config">
                 <field name="is_global"/>
                 <field name="model_name"/>
                 <field name="enabled"/>
                 <field name="text_field_path"/>
                 <field name="text_extractor"/>
                 <field name="provider_model"/>
-            </list>
+            </tree>
         </field>
     </record>
 
     <record id="action_orc_embedding_config" model="ir.actions.act_window">
         <field name="name">AI Semantic Search</field>
         <field name="res_model">orc.embedding.config</field>
-        <field name="view_mode">list,form</field>
+        <field name="view_mode">tree,form</field>
     </record>
 
     <menuitem id="menu_orc_embedding_root"

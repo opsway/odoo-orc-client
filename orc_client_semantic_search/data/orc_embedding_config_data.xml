@@ -19,15 +19,16 @@
     </record>
 
     <!--
-        v1 indexed corpus: knowledge.article only. Adding more
-        models is a config-row change (create another row, set
-        text_field_path + text_extractor, save).
+        v1 indexed corpus: document.page only (OCA `knowledge` repo's
+        wiki model — the v15 stand-in for what was `knowledge.article`
+        upstream). Adding more models is a config-row change
+        (create another row, set text_field_path + text_extractor, save).
     -->
-    <record id="orc_embedding_config_knowledge_article" model="orc.embedding.config">
+    <record id="orc_embedding_config_document_page" model="orc.embedding.config">
         <field name="is_global">False</field>
-        <field name="model_name">knowledge.article</field>
+        <field name="model_name">document.page</field>
         <field name="enabled">True</field>
-        <field name="text_field_path">body</field>
+        <field name="text_field_path">content</field>
         <field name="text_extractor">html_strip</field>
     </record>
 

@@ -71,7 +71,7 @@ class OrcEmbeddingConfig(models.Model):
 
     model_name = fields.Char(
         string="Odoo model",
-        help="e.g. knowledge.article",
+        help="e.g. document.page",
         index=True,
     )
     enabled = fields.Boolean(
@@ -80,7 +80,7 @@ class OrcEmbeddingConfig(models.Model):
     )
     text_field_path = fields.Char(
         string="Text field path",
-        help="Dotted path to the text source on the record. e.g. 'body'.",
+        help="Dotted path to the text source on the record. e.g. 'content'.",
     )
     text_extractor = fields.Selection(
         selection=[

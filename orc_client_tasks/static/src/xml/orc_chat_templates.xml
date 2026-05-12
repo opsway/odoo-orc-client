@@ -5,7 +5,7 @@
          new click behavior. A click toggles the task-list popover
          instead of opening AI Workplace in a new tab. The old "open in a new
          tab" action is still available from inside the popover. -->
-    <t t-name="orc_client_tasks.OrcSystrayWithTasks">
+    <t t-name="orc_client_tasks.OrcSystrayWithTasks" owl="1">
         <div t-if="enabled" class="o-dropdown dropdown o-orc-systray">
             <button type="button"
                     class="btn btn-link o-orc-systray-btn"
@@ -18,14 +18,14 @@
                       t-esc="badgeLabel"/>
             </button>
             <div t-if="ui.dropdownOpen" class="o_orc_chat_dropdown">
-                <OrcTaskListPopover onPicked.bind="onTaskPicked"/>
+                <OrcTaskListPopover onPicked="() => this.onTaskPicked()"/>
             </div>
         </div>
     </t>
 
     <!-- Task list + inline new-task composer. Rendered inside the
          systray dropdown; also standalone-friendly. -->
-    <t t-name="orc_client_tasks.OrcTaskListPopover">
+    <t t-name="orc_client_tasks.OrcTaskListPopover" owl="1">
         <div class="o_orc_chat_popover">
             <div class="o_orc_chat_popover_header">
                 <span class="o_orc_chat_popover_title">AI Workplace</span>
@@ -77,7 +77,7 @@
          turns the condition true, leaving task clicks looking like
          no-ops until a reload. CSS (.o_orc_chat_dock with no children)
          stays invisible via pointer-events:none + zero layout impact. -->
-    <t t-name="orc_client_tasks.OrcChatDock">
+    <t t-name="orc_client_tasks.OrcChatDock" owl="1">
         <div class="o_orc_chat_dock">
             <t t-if="enabled">
                 <t t-foreach="visibleWindows" t-as="win" t-key="win.room_id">
@@ -93,7 +93,7 @@
            the nonce at mount time into the iframe.
          - When folded, body is collapsed (display:none) but not
            destroyed — iframe state (including SSE stream) is kept. -->
-    <t t-name="orc_client_tasks.OrcChatWindow">
+    <t t-name="orc_client_tasks.OrcChatWindow" owl="1">
         <div class="o_orc_chat_window"
              t-att-class="{'o_orc_chat_window_folded': props.folded}">
             <div class="o_orc_chat_window_header"

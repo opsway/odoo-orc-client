@@ -22,13 +22,13 @@ class OrcEmbeddingFieldsTests(TransactionCase):
     def test_unique_model_res_id(self):
         Embedding = self.env["orc.embedding"]
         Embedding.create({
-            "model": "knowledge.article", "res_id": 1,
+            "model": "document.page", "res_id": 1,
             "content_hash": "a" * 64,
         })
         with self.assertRaises(IntegrityError) as ctx:
             with self.cr.savepoint():
                 Embedding.create({
-                    "model": "knowledge.article", "res_id": 1,
+                    "model": "document.page", "res_id": 1,
                     "content_hash": "b" * 64,
                 })
         # Confirm it's the unique constraint, not some other DB error.
@@ -64,19 +64,19 @@ class OrcEmbeddingConfigSingletonTests(TransactionCase):
         Config = self.env["orc.embedding.config"]
         existing = Config.search([("is_global", "=", True)], limit=1)
         with self.assertRaises(ValidationError):
-            existing.write({"model_name": "knowledge.article"})
+            existing.write({"model_name": "document.page"})
 
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
 class OrcEmbeddingConfigPerModelTests(TransactionCase):
-    def test_demo_data_creates_knowledge_article_row(self):
+    def test_demo_data_creates_document_page_row(self):
         Config = self.env["orc.embedding.config"]
         rows = Config.search([
             ("is_global", "=", False),
-            ("model_name", "=", "knowledge.article"),
+            ("model_name", "=", "document.page"),
         ])
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows.text_field_path, "body")
+        self.assertEqual(rows.text_field_path, "content")
         self.assertEqual(rows.text_extractor, "html_strip")
 
     def test_per_model_row_must_have_model_name(self):
@@ -90,8 +90,8 @@ class OrcEmbeddingConfigPerModelTests(TransactionCase):
             with self.cr.savepoint():
                 Config.create({
                     "is_global": False,
-                    "model_name": "knowledge.article",  # already in demo data
-                    "text_field_path": "body",
+                    "model_name": "document.page",  # already in demo data
+                    "text_field_path": "content",
                     "text_extractor": "html_strip",
                 })
         self.assertEqual(ctx.exception.pgcode, UNIQUE_VIOLATION)
@@ -115,8 +115,8 @@ class OrcEmbeddingQueueFieldsTests(TransactionCase):
 
     def test_unique_model_res_id(self):
         Queue = self.env["orc.embedding.queue"]
-        Queue.create({"model": "knowledge.article", "res_id": 1})
+        Queue.create({"model": "document.page", "res_id": 1})
         with self.assertRaises(IntegrityError) as ctx:
             with self.cr.savepoint():
-                Queue.create({"model": "knowledge.article", "res_id": 1})
+                Queue.create({"model": "document.page", "res_id": 1})
         self.assertEqual(ctx.exception.pgcode, UNIQUE_VIOLATION)

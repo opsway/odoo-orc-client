@@ -19,9 +19,9 @@ class CosineTopKTests(TransactionCase):
         # it scores 1, the orthogonal one scores 0, the inverse -1.
         q = _norm([1.0, 0.0])
         cands = [
-            ("knowledge.article", 1, _norm([1.0, 0.0])),
-            ("knowledge.article", 2, _norm([0.0, 1.0])),
-            ("knowledge.article", 3, _norm([-1.0, 0.0])),
+            ("document.page", 1, _norm([1.0, 0.0])),
+            ("document.page", 2, _norm([0.0, 1.0])),
+            ("document.page", 3, _norm([-1.0, 0.0])),
         ]
         out = top_k(q, cands, limit=10)
         self.assertEqual(len(out), 3)
@@ -49,10 +49,10 @@ class CosineTopKTests(TransactionCase):
         # mapping into dicts). Pin the tuple positions so the wire
         # contract doesn't drift.
         q = _norm([1.0, 0.0])
-        cands = [("knowledge.article", 42, _norm([1.0, 0.0]))]
+        cands = [("document.page", 42, _norm([1.0, 0.0]))]
         out = top_k(q, cands, limit=10)
         self.assertEqual(len(out), 1)
         model, res_id, score = out[0]
-        self.assertEqual(model, "knowledge.article")
+        self.assertEqual(model, "document.page")
         self.assertEqual(res_id, 42)
         self.assertIsInstance(score, float)
