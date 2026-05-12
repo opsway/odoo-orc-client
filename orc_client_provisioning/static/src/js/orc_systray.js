@@ -1,8 +1,9 @@
-/** @odoo-module */
+/** @odoo-module **/
 
-import { Component } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { session } from "@web/session";
+
+const { Component } = owl;
 
 /**
  * AI Workplace systray icon. Visible iff the current user has orc_enabled=True
@@ -13,20 +14,15 @@ import { session } from "@web/session";
  * user in to AI Workplace with no second password prompt.
  */
 export class OrcSystray extends Component {
-    static template = "orc_client_provisioning.OrcSystray";
-    static props = {};
-
-    get isEnabled() {
-        return Boolean(session.orc_enabled);
-    }
-
     onClick() {
         window.open("/orc/sso/start", "_blank", "noopener");
     }
 }
+OrcSystray.template = "orc_client_provisioning.OrcSystray";
 
 export const orcSystrayItem = {
     Component: OrcSystray,
+    isDisplayed: () => Boolean(session.orc_enabled),
 };
 
 registry

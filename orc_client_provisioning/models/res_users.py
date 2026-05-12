@@ -98,15 +98,12 @@ class ResUsers(models.Model):
     def _orc_generate_api_key(self):
         """Generate a new Odoo API key for this user, tagged as AI Workplace-managed."""
         self.ensure_one()
-        icp = self.env["ir.config_parameter"].sudo()
-        rotation_days = int(icp.get_param("orc.rotation_days") or 30)
-        expiration = fields.Datetime.add(fields.Datetime.now(), days=rotation_days)
         try:
             raw_key = (
                 self.env["res.users.apikeys"]
                 .with_user(self)
                 .sudo()
-                ._generate(scope=None, name=ORC_KEY_NAME, expiration_date=expiration)
+                ._generate(None, ORC_KEY_NAME)
             )
         except Exception as exc:
             _logger.exception("[orc] _generate failed for %s", self.login)

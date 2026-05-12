@@ -71,7 +71,7 @@ class TestReconcileDrift(TransactionCase):
         ])
         self.assertFalse(log)
         # Healthy in-sync user is stamped ok.
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
 
@@ -93,7 +93,7 @@ class TestReconcileDrift(TransactionCase):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.assertEqual(calls["provision"], 1, "expected one re-provision call")
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
         self.assertIn("re-provisioned", self.user.orc_last_sync_message or "")
@@ -124,7 +124,7 @@ class TestReconcileDrift(TransactionCase):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.assertEqual(calls["revoke_email"], self.user.login)
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("deprovisioned", self.user.orc_last_sync_message or "")
 
@@ -177,7 +177,7 @@ class TestReconcileDrift(TransactionCase):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.assertEqual(calls["provision"], 1)
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("re-provisioned", self.user.orc_last_sync_message or "")
 
@@ -190,7 +190,7 @@ class TestReconcileDrift(TransactionCase):
         with patch.multiple(self.env["orc.client"], list_users=fail):
             self.env["res.users"]._cron_orc_reconcile()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "error")
         self.assertIn("upstream 500", self.user.orc_last_sync_message or "")
         self.assertTrue(self.user.orc_last_sync_at)
@@ -207,7 +207,7 @@ class TestReconcileDrift(TransactionCase):
         addon always sends role='user'."""
         manager_group = self.env.ref("orc_client_provisioning.group_orc_manager")
         self.user.sudo().write({"groups_id": [(4, manager_group.id)]})
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertTrue(self.user.orc_is_manager)
 
         calls = {"role": None}
@@ -246,7 +246,7 @@ class TestReconcileDrift(TransactionCase):
             push_odoo_key=lambda **kw: None,
         ):
             self.env["res.users"]._cron_orc_rotate_keys()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("rotated", self.user.orc_last_sync_message or "")
         self.assertTrue(self.user.orc_last_sync_at)
@@ -264,7 +264,7 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_rotate_keys()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "error")
         self.assertIn("ORC down", self.user.orc_last_sync_message or "")
         log = self.env["orc.audit.log"].search([
@@ -288,7 +288,7 @@ class TestReconcileDrift(TransactionCase):
             },
         ):
             self.env["res.users"]._cron_orc_sync()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
 
     def test_cron_orc_maintenance_runs_rotate(self):
@@ -299,6 +299,6 @@ class TestReconcileDrift(TransactionCase):
             push_odoo_key=lambda **kw: None,
         ):
             self.env["res.users"]._cron_orc_maintenance()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("rotated", self.user.orc_last_sync_message or "")

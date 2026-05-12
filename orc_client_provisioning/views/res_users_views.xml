@@ -10,20 +10,20 @@
                     <group>
                         <field name="orc_enabled"/>
                         <field name="orc_is_manager" invisible="1"/>
-                        <field name="orc_last_sync_at" readonly="1" invisible="not orc_enabled"/>
+                        <field name="orc_last_sync_at" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
                         <field
                             name="orc_last_sync_status"
                             widget="badge"
                             decoration-success="orc_last_sync_status == 'ok'"
                             decoration-warning="orc_last_sync_status == 'drift'"
                             decoration-danger="orc_last_sync_status == 'error'"
-                            invisible="not orc_enabled"
+                            attrs="{'invisible': [('orc_enabled', '=', False)]}"
                         />
-                        <field name="orc_last_sync_message" readonly="1" invisible="not orc_last_sync_message"/>
-                        <field name="orc_user_id" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_provisioned_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_last_rotation_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_api_key_id" readonly="1" invisible="not orc_enabled"/>
+                        <field name="orc_last_sync_message" readonly="1" attrs="{'invisible': [('orc_last_sync_message', '=', False)]}"/>
+                        <field name="orc_user_id" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_provisioned_at" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_last_rotation_at" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_api_key_id" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
                     </group>
                 </page>
             </xpath>
@@ -35,7 +35,7 @@
         <field name="model">res.users</field>
         <field name="inherit_id" ref="base.view_users_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//list/field[@name='login']" position="after">
+            <xpath expr="//tree/field[@name='login']" position="after">
                 <field name="orc_enabled" optional="show"/>
             </xpath>
         </field>

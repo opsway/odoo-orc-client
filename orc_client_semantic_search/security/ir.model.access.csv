@@ -1,5 +1,0 @@
-id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_orc_embedding_admin,orc.embedding admin,model_orc_embedding,base.group_system,1,1,1,1
-access_orc_embedding_config_admin,orc.embedding.config admin,model_orc_embedding_config,base.group_system,1,1,1,1
-access_orc_embedding_queue_admin,orc.embedding.queue admin,model_orc_embedding_queue,base.group_system,1,1,1,1
-access_orc_embedding_user,orc.embedding user (semantic_search),model_orc_embedding,base.group_user,1,0,0,0

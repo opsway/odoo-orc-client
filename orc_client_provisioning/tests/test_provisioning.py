@@ -40,7 +40,7 @@ class TestOrcProvisioning(TransactionCase):
     def test_provision_creates_key_and_records_audit(self):
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_user_id, "orc-uid-1")
         self.assertTrue(self.user.orc_api_key_id)
         self.assertEqual(self.user.orc_api_key_id.name, "AI Workplace (auto-managed)")
@@ -56,7 +56,7 @@ class TestOrcProvisioning(TransactionCase):
         immediately, without waiting for the hourly cron."""
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
         self.assertIn("provisioned", self.user.orc_last_sync_message or "")
@@ -84,7 +84,7 @@ class TestOrcProvisioning(TransactionCase):
                 self.user.orc_enabled = True
 
         # Rollback: no ORC uid, no key row persists.
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertFalse(self.user.orc_user_id)
         self.assertFalse(self.user.orc_api_key_id)
 
@@ -112,7 +112,7 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client(revoke_infra_access=capture_revoke):
             self.user.orc_enabled = False
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertFalse(self.user.orc_enabled)
         # Breadcrumb retained.
         self.assertEqual(self.user.orc_user_id, orc_uid)
@@ -143,7 +143,7 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client(provision_user=capture_provision):
             self.user.orc_enabled = True
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache()
         self.assertTrue(self.user.orc_api_key_id)  # fresh key pushed
         # provision_user was actually called despite the breadcrumb
         # being present (write-hook keys off `orc_api_key_id`, not

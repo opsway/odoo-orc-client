@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Provisioning",
-    "version": "18.0.1.10.2",
+    "version": "15.0.1.0.0",
     "summary": "Provision Odoo users into the AI Workplace with auto-rotated API keys and single-click SSO.",
     "description": """
 AI Workplace — Provisioning
@@ -36,8 +36,10 @@ Configuration is via ``ir.config_parameter`` keys. See the repo README.
     "assets": {
         "web.assets_backend": [
             "orc_client_provisioning/static/src/js/orc_systray.js",
-            "orc_client_provisioning/static/src/js/orc_systray.xml",
             "orc_client_provisioning/static/src/scss/orc_systray.scss",
+        ],
+        "web.assets_qweb": [
+            "orc_client_provisioning/static/src/js/orc_systray.xml",
         ],
     },
     "installable": True,

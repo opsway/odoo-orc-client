@@ -2,7 +2,7 @@
 <odoo>
     <menuitem id="menu_orc_root"
               name="AI Workplace"
-              web_icon="orc_client_provisioning,static/description/icon.png"
+              web_icon="orc_client_provisioning,static/description/icon.svg"
               groups="orc_client_provisioning.group_orc_manager"/>
 
     <menuitem id="menu_orc_audit_log"
