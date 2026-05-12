@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <!-- Override of orc_client_provisioning.OrcSystray: same green icon,
+         new click behavior. A click toggles the task-list popover
+         instead of opening AI Workplace in a new tab. The old "open in a new
+         tab" action is still available from inside the popover. -->
+    <t t-name="orc_client_tasks.OrcSystrayWithTasks">
+        <div t-if="enabled" class="o-dropdown dropdown o-orc-systray">
+            <button type="button"
+                    class="btn btn-link o-orc-systray-btn"
+                    t-on-click="onToggleDropdown"
+                    title="AI Workplace">
+                <img src="/orc_client_provisioning/static/description/icon.svg"
+                     class="o-orc-systray-icon" alt="AI Workplace"/>
+                <span t-if="badgeLabel"
+                      class="o_orc_chat_badge"
+                      t-esc="badgeLabel"/>
+            </button>
+            <div t-if="ui.dropdownOpen" class="o_orc_chat_dropdown">
+                <OrcTaskListPopover onPicked.bind="onTaskPicked"/>
+            </div>
+        </div>
+    </t>
+
+    <!-- Task list + inline new-task composer. Rendered inside the
+         systray dropdown; also standalone-friendly. -->
+    <t t-name="orc_client_tasks.OrcTaskListPopover">
+        <div class="o_orc_chat_popover">
+            <div class="o_orc_chat_popover_header">
+                <span class="o_orc_chat_popover_title">AI Workplace</span>
+                <div class="o_orc_chat_popover_actions">
+                    <button type="button"
+                            class="btn btn-sm btn-link"
+                            t-on-click="onClickOpenInOrc"
+                            title="Open in AI Workplace">
+                        <i class="fa fa-external-link"/>
+                        <span class="ms-1">Open in app</span>
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-link o_orc_chat_compose_toggle"
+                            t-on-click="onClickNewTask"
+                            t-att-disabled="ui.creatingTask"
+                            title="New chat">
+                        <i t-att-class="ui.creatingTask ? 'fa fa-spinner fa-spin' : 'fa fa-plus'"/>
+                    </button>
+                </div>
+            </div>
+
+            <div class="o_orc_chat_popover_list">
+                <t t-if="!tasks.length">
+                    <p class="text-muted small p-3 mb-0">No chats yet.</p>
+                </t>
+                <t t-foreach="tasks" t-as="task" t-key="task.room_id">
+                    <button type="button"
+                            class="o_orc_chat_task_row"
+                            t-att-class="{'o_orc_chat_task_row_closed': task.status === 'closed'}"
+                            t-on-click="() => this.onClickTask(task)">
+                        <span class="o_orc_chat_task_title">
+                            <t t-esc="taskLabel(task)"/>
+                            <span t-if="isUnread(task)" class="o_orc_chat_unread_dot" title="Unread activity"/>
+                        </span>
+                        <span t-if="taskSubtitle(task)"
+                              class="o_orc_chat_task_subtitle"
+                              t-esc="taskSubtitle(task)"/>
+                    </button>
+                </t>
+            </div>
+        </div>
+    </t>
+
+    <!-- Dock: fixed-positioned overlay, empty when no windows open.
+         The root <div> is always rendered (with `t-if` only on the
+         inner content) so OWL/main_components has a stable mount
+         point — a component whose template renders *nothing* on its
+         first pass won't always repaint reliably when state later
+         turns the condition true, leaving task clicks looking like
+         no-ops until a reload. CSS (.o_orc_chat_dock with no children)
+         stays invisible via pointer-events:none + zero layout impact. -->
+    <t t-name="orc_client_tasks.OrcChatDock">
+        <div class="o_orc_chat_dock">
+            <t t-if="enabled">
+                <t t-foreach="visibleWindows" t-as="win" t-key="win.room_id">
+                    <OrcChatWindow roomId="win.room_id" folded="win.folded"/>
+                </t>
+            </t>
+        </div>
+    </t>
+
+    <!-- Single foldable chat window.
+         - Header always visible (title, fold/unfold, close).
+         - Body = hidden SSO form + iframe. The form auto-submits
+           the nonce at mount time into the iframe.
+         - When folded, body is collapsed (display:none) but not
+           destroyed — iframe state (including SSE stream) is kept. -->
+    <t t-name="orc_client_tasks.OrcChatWindow">
+        <div class="o_orc_chat_window"
+             t-att-class="{'o_orc_chat_window_folded': props.folded}">
+            <div class="o_orc_chat_window_header"
+                 t-on-click="onToggleFold">
+                <span class="o_orc_chat_window_title">
+                    <t t-esc="title"/>
+                    <span t-if="unread" class="o_orc_chat_unread_dot"/>
+                </span>
+                <div class="o_orc_chat_window_actions">
+                    <button type="button"
+                            class="btn btn-sm btn-link o_orc_chat_open_in_orc"
+                            t-on-click.stop="onOpenInOrc"
+                            title="Open this chat in AI Workplace">
+                        <i class="fa fa-external-link"/>
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-link"
+                            t-on-click.stop="onToggleFold"
+                            t-att-title="foldTitle">
+                        <i t-att-class="props.folded ? 'fa fa-chevron-up' : 'fa fa-chevron-down'"/>
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-link"
+                            t-on-click.stop="onClose"
+                            title="Close">
+                        <i class="fa fa-times"/>
+                    </button>
+                </div>
+            </div>
+            <div class="o_orc_chat_window_body">
+                <div t-if="ui.loading and !ui.error" class="o_orc_chat_window_loading">Opening chat…</div>
+                <div t-if="ui.error" class="o_orc_chat_window_error">
+                    <strong>Couldn't open chat.</strong>
+                    <div class="small text-muted mt-1" t-esc="ui.error"/>
+                </div>
+                <!-- The nonce-POST target name is shared between the
+                     iframe `name` and the form `target`. -->
+                <iframe t-if="ui.ssoUrl"
+                        t-ref="iframe"
+                        t-att-name="ui.frameName"
+                        t-on-load="onIframeLoad"
+                        src="about:blank"
+                        sandbox="allow-forms allow-scripts allow-same-origin allow-popups"
+                        class="o_orc_chat_iframe"/>
+                <form t-if="ui.ssoUrl and ui.ssoNonce"
+                      t-ref="form"
+                      method="POST"
+                      t-att-action="ui.ssoUrl"
+                      t-att-target="ui.frameName"
+                      style="display:none;">
+                    <input type="hidden" name="nonce" t-att-value="ui.ssoNonce"/>
+                </form>
+            </div>
+        </div>
+    </t>
+
+</templates>
