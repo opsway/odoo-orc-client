@@ -200,7 +200,6 @@ const orcChatService = {
             const res = await fetch("/orc/tasks/open", {
                 method: "POST",
                 credentials: "same-origin",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ room_id: roomId }),
             });
             const data = await res.json();
@@ -221,7 +220,6 @@ const orcChatService = {
             const res = await fetch("/orc/tasks/create", {
                 method: "POST",
                 credentials: "same-origin",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
             const data = await res.json();
