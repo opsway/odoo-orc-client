@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_orc_client_build_reporter" model="ir.ui.view">
+        <field name="name">res.config.settings.form.inherit.orc_client_build_reporter</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//form" position="inside">
+                <app string="AI Workplace — Build Reporter"
+                     name="orc_client_build_reporter"
+                     groups="base.group_system">
+                    <block title="Webhook (optional overrides)"
+                           help="The defaults baked into the addon source usually do the right thing. Use these fields only if you need to override at runtime — e.g. for staging tests without forking the addon.">
+                        <setting string="AI Workplace org_id"
+                                 help="Organisation UUID in AI Workplace. Public identifier — not a secret.">
+                            <field name="orc_build_reporter_org_id"/>
+                        </setting>
+                        <setting string="AI Workplace webhook base URL"
+                                 help="Your AI Workplace deployment's webhook root, without the org_id/sha suffix.">
+                            <field name="orc_build_reporter_webhook_base"/>
+                        </setting>
+                    </block>
+                </app>
+            </xpath>
+        </field>
+    </record>
+</odoo>
