@@ -9,14 +9,10 @@
                 <app string="AI Workplace — Build Reporter"
                      name="orc_client_build_reporter"
                      groups="base.group_system">
-                    <block title="Webhook (optional overrides)"
-                           help="The defaults baked into the addon source usually do the right thing. Use these fields only if you need to override at runtime — e.g. for staging tests without forking the addon.">
-                        <setting string="AI Workplace org_id"
-                                 help="Organisation UUID in AI Workplace. Public identifier — not a secret.">
-                            <field name="orc_build_reporter_org_id"/>
-                        </setting>
+                    <block title="Webhook (optional override)"
+                           help="The default baked into the addon source usually does the right thing. Use this field only if you need to override at runtime — e.g. for staging tests without forking the addon.">
                         <setting string="AI Workplace webhook base URL"
-                                 help="Your AI Workplace deployment's webhook root, without the org_id/sha suffix.">
+                                 help="Your AI Workplace deployment's webhook root, without the SHA suffix.">
                             <field name="orc_build_reporter_webhook_base"/>
                         </setting>
                     </block>

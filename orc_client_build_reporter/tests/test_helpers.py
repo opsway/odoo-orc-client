@@ -9,8 +9,10 @@ from odoo.tests import tagged
 from odoo.tests.common import BaseCase
 
 from odoo.addons.orc_client_build_reporter.models.build_reporter import (
+    _GH_URL_RE,
     get_build_id,
     get_commit_sha,
+    get_repo_from_git,
     get_stage,
     parse_dev_url,
 )
@@ -126,9 +128,11 @@ def _git(args, cwd=None):
     )
 
 
-def _make_repo():
+def _make_repo(origin_url=None):
     d = tempfile.mkdtemp(prefix="orc_br_test_")
     _git(["init", "-q", d])
+    if origin_url:
+        _git(["-C", d, "remote", "add", "origin", origin_url])
     with open(os.path.join(d, "f"), "w") as fp:
         fp.write("x")
     _git(["-C", d, "add", "f"])
@@ -136,9 +140,7 @@ def _make_repo():
     return d
 
 
-@tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestGetCommitSha(BaseCase):
-
+class _TempReposMixin:
     def setUp(self):
         super().setUp()
         self._cleanup = []
@@ -148,15 +150,87 @@ class TestGetCommitSha(BaseCase):
             shutil.rmtree(p, ignore_errors=True)
         super().tearDown()
 
+    def _repo(self, origin_url=None):
+        p = _make_repo(origin_url=origin_url)
+        self._cleanup.append(p)
+        return p
+
+    def _empty_dir(self):
+        d = tempfile.mkdtemp(prefix="orc_br_empty_")
+        self._cleanup.append(d)
+        return d
+
+
+@tagged('post_install', '-at_install', 'orc_client_build_reporter')
+class TestGetCommitSha(_TempReposMixin, BaseCase):
+
     def test_returns_40_char_hex(self):
-        repo = _make_repo()
-        self._cleanup.append(repo)
-        sha = get_commit_sha(repo)
+        sha = get_commit_sha(self._repo())
         self.assertIsNotNone(sha)
         self.assertEqual(len(sha), 40)
         self.assertTrue(all(c in "0123456789abcdef" for c in sha))
 
     def test_not_a_git_dir_returns_none(self):
-        d = tempfile.mkdtemp(prefix="orc_br_empty_")
-        self._cleanup.append(d)
-        self.assertIsNone(get_commit_sha(d))
+        self.assertIsNone(get_commit_sha(self._empty_dir()))
+
+
+@tagged('post_install', '-at_install', 'orc_client_build_reporter')
+class TestGitHubUrlRegex(BaseCase):
+    """The body's `repo` field is parsed by `_GH_URL_RE`. We accept
+    SSH and HTTPS shapes, with or without the `.git` suffix."""
+
+    def _match(self, url):
+        m = _GH_URL_RE.search(url)
+        self.assertIsNotNone(m, f"regex did not match {url!r}")
+        return f"{m.group(1)}/{m.group(2)}"
+
+    def test_ssh_url(self):
+        self.assertEqual(
+            self._match("git@github.com:opsway/pg_group.git"),
+            "opsway/pg_group",
+        )
+
+    def test_https_with_dot_git(self):
+        self.assertEqual(
+            self._match("https://github.com/opsway/pg_group.git"),
+            "opsway/pg_group",
+        )
+
+    def test_https_trailing_slash(self):
+        self.assertEqual(
+            self._match("https://github.com/opsway/pg_group/"),
+            "opsway/pg_group",
+        )
+
+
+@tagged('post_install', '-at_install', 'orc_client_build_reporter')
+class TestGetRepoFromGit(_TempReposMixin, BaseCase):
+
+    def test_https_dot_git(self):
+        self.assertEqual(
+            get_repo_from_git(
+                self._repo("https://github.com/opsway/pg_group.git"),
+            ),
+            "opsway/pg_group",
+        )
+
+    def test_ssh(self):
+        self.assertEqual(
+            get_repo_from_git(
+                self._repo("git@github.com:opsway/pg_group.git"),
+            ),
+            "opsway/pg_group",
+        )
+
+    def test_non_github_origin_returns_none(self):
+        self.assertIsNone(
+            get_repo_from_git(
+                self._repo("https://gitlab.com/foo/bar.git"),
+            ),
+        )
+
+    def test_no_origin_returns_none(self):
+        self.assertIsNone(get_repo_from_git(self._repo()))
+
+    def test_not_a_git_dir_returns_none(self):
+        self.assertIsNone(get_repo_from_git(self._empty_dir()))

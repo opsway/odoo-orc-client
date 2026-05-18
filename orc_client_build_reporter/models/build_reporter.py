@@ -6,17 +6,20 @@ What this addon does
 On every Odoo.sh registry init (once per worker), POSTs a single
 report to the AI Workplace's public webhook::
 
-    POST {WEBHOOK_BASE}/{ORG_ID}/{sha}
+    POST {WEBHOOK_BASE}/{sha}
     {
         "build_url":   "https://<slug>-<build_id>.dev.odoo.com",
         "stage":       "dev" | "staging" | "production",
         "build_id":    "<digits>",
-        "branch_slug": "<slug>"
+        "branch_slug": "<slug>",
+        "repo":        "<owner>/<name>"
     }
 
-Workplace stores ``(sha → build_id, dev_url, ssh_target)`` in its
-``odoo_sh_builds`` table; the developer-flow agent reads from there
-to know *which* dev URL to SSH into for a given commit.
+Workplace routes the report to the right organisation by matching
+``repo`` against its stored ``organizations.github_repo``. It stores
+``(sha → build_id, dev_url, ssh_target)`` so the developer-flow
+agent can resolve "which dev URL do I SSH into for this commit?"
+from PG without any GitHub round-trip.
 
 Why this shape (vs the v1 GitHub-PAT approach)
 ----------------------------------------------
@@ -26,17 +29,18 @@ stored in ``ir.config_parameter`` is wiped along with the DB, so v1
 silently stopped reporting after the first new build. The current
 path:
 
-* **No secret in the addon** — ``ORG_ID`` is a public routing
-  identifier; the SHA is public the moment it's pushed.
+* **No secret in the addon** — the SHA is public the moment it's
+  pushed; ``repo`` is derived from ``git remote get-url origin`` and
+  is already visible to anyone with repo read access.
 * **No GitHub token anywhere** — Workplace has its own PAT for the
   SHA-on-repo cross-check on the receiving side.
-* **Survives DB resets** — ``ORG_ID`` and ``WEBHOOK_BASE`` are
-  constants in this source file, part of every fresh build's
-  filesystem.
+* **Survives DB resets** — ``WEBHOOK_BASE`` is a constant in this
+  source file, part of every fresh build's filesystem.
 * **Robust to spoofing** — Workplace validates the SHA exists on the
-  org's known repo, structurally checks the ``build_url`` belongs to
-  ``.odoo.com``, and the agent re-verifies ``git rev-parse HEAD`` on
-  the dev server before acting on the reported ``ssh_target``.
+  reported repo, structurally checks the ``build_url`` is a
+  ``.odoo.com`` host, and the agent re-verifies ``git rev-parse
+  HEAD`` on the dev server before acting on the reported
+  ``ssh_target``.
 """
 import logging
 import os
@@ -55,24 +59,20 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # === CUSTOMER CONFIGURATION ===
 #
-# Edit these two values for your deployment, then commit. Both are
-# PUBLIC identifiers — NOT secrets — so committing them is safe.
+# Edit this value for your deployment, then commit. It is a PUBLIC
+# URL — NOT a secret — so committing is safe.
 #
-#   ORG_ID        Your organisation's UUID in AI Workplace. Visible
-#                 in the Workplace admin UI on the org details page.
-#   WEBHOOK_BASE  Your Workplace deployment's webhook root, e.g.
-#                 ``https://orc.example.com/webhook/odoo-sh/build-ready``.
+#   WEBHOOK_BASE  Your AI Workplace deployment's webhook root, e.g.
+#                 ``https://help.opsway.com/webhook/odoo-sh/build-ready``.
 #
-# Both values can be overridden at runtime by setting the matching
-# ``ir.config_parameter`` keys (see ``res_config_settings.py``) — useful
-# for staging tests without forking. The hard-coded defaults below
-# win whenever the ICP entries are empty or missing.
+# The value can be overridden at runtime by setting the matching
+# ``ir.config_parameter`` key (see ``res_config_settings.py``) — useful
+# for staging tests without forking. The hard-coded default below
+# wins whenever the ICP entry is empty.
 # ---------------------------------------------------------------------------
-ORG_ID = ""               # e.g. "11111111-2222-3333-4444-555555555555"
-WEBHOOK_BASE = ""         # e.g. "https://orc.opsway.com/webhook/odoo-sh/build-ready"
+WEBHOOK_BASE = "https://help.opsway.com/webhook/odoo-sh/build-ready"
 # ---------------------------------------------------------------------------
 
-_PARAM_ORG_ID = "orc_client_build_reporter.org_id"
 _PARAM_WEBHOOK_BASE = "orc_client_build_reporter.webhook_base"
 _PARAM_LAST_REPORT = "orc_client_build_reporter.last_report_key"
 
@@ -86,6 +86,8 @@ _DEV_HOST_RE = re.compile(
     r"^(?P<slug>[a-z0-9][a-z0-9-]+)-(?P<build_id>\d+)\.dev\.odoo\.com$"
 )
 _VALID_STAGES = ("dev", "staging", "production")
+# `git@github.com:owner/repo.git` or `https://github.com/owner/repo[.git]`.
+_GH_URL_RE = re.compile(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 
 def get_build_id(dbname):
@@ -115,14 +117,29 @@ def get_commit_sha(addon_dir):
         return None
 
 
+def get_repo_from_git(addon_dir):
+    """Parse ``owner/repo`` from git's origin URL.
+
+    Supports both ``git@github.com:owner/repo.git`` and
+    ``https://github.com/owner/repo[.git]``. Returns None on a
+    non-GitHub origin (e.g. a self-hosted GitLab) — AI Workplace
+    only handles GitHub-hosted projects today.
+    """
+    try:
+        url = subprocess.check_output(
+            ["git", "-C", addon_dir, "config", "--get", "remote.origin.url"],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).decode().strip()
+        m = _GH_URL_RE.search(url)
+        return f"{m.group(1)}/{m.group(2)}" if m else None
+    except Exception:
+        return None
+
+
 def parse_dev_url(build_url):
     """Returns (branch_slug, build_id) if `build_url` is a canonical
-    Odoo.sh dev hostname, else None.
-
-    >>> parse_dev_url("https://acme-32258372.dev.odoo.com")
-    ('acme', '32258372')
-    >>> parse_dev_url("https://evil.attacker.com")
-    """
+    Odoo.sh dev hostname, else None."""
     try:
         from urllib.parse import urlparse
         parsed = urlparse(build_url)
@@ -145,15 +162,11 @@ def get_stage():
     return "dev"
 
 
-def _resolve_config(env):
-    """Return (org_id, webhook_base) using ICP overrides if set, else
-    the in-source constants. ``None`` for either means "not configured"."""
+def _resolve_webhook_base(env):
+    """ICP value wins if set; in-source constant is the fallback."""
     ICP = env["ir.config_parameter"].sudo()
-    org_id = (ICP.get_param(_PARAM_ORG_ID) or "").strip() or (ORG_ID or "").strip()
-    webhook_base = (
-        ICP.get_param(_PARAM_WEBHOOK_BASE) or ""
-    ).strip() or (WEBHOOK_BASE or "").strip()
-    return (org_id or None, webhook_base or None)
+    icp_value = (ICP.get_param(_PARAM_WEBHOOK_BASE) or "").strip()
+    return icp_value or (WEBHOOK_BASE or "").strip() or None
 
 
 def _run_reporter(dbname):
@@ -183,11 +196,18 @@ def _run_reporter(dbname):
             branch_slug = dbname.rsplit("-", 1)[0]
             build_url = f"https://{branch_slug}-{build_id}.dev.odoo.com"
 
-        # --- 2. Derive SHA from the addon's own checkout -----------------
+        # --- 2. Derive SHA and repo from the addon's own checkout --------
         addon_dir = os.path.dirname(os.path.abspath(__file__))
         sha = get_commit_sha(addon_dir)
         if not sha:
             _logger.warning("[orc_build_reporter] cannot derive sha")
+            return
+        repo = get_repo_from_git(addon_dir)
+        if not repo:
+            _logger.warning(
+                "[orc_build_reporter] cannot derive repo from origin URL "
+                "(not a GitHub remote?)",
+            )
             return
 
         # --- 3. Stage detection ------------------------------------------
@@ -196,12 +216,12 @@ def _run_reporter(dbname):
         # --- 4. Config + debounce ----------------------------------------
         with Registry(dbname).cursor() as cr:
             env = api.Environment(cr, SUPERUSER_ID, {})
-            org_id, webhook_base = _resolve_config(env)
-            if not org_id or not webhook_base:
+            webhook_base = _resolve_webhook_base(env)
+            if not webhook_base:
                 _logger.warning(
-                    "[orc_build_reporter] missing config: set ORG_ID and "
-                    "WEBHOOK_BASE in build_reporter.py (or the matching "
-                    "ICP keys for one-off testing)",
+                    "[orc_build_reporter] missing webhook base: set "
+                    "WEBHOOK_BASE in build_reporter.py (or the ICP key "
+                    "for one-off testing)",
                 )
                 return
 
@@ -219,21 +239,22 @@ def _run_reporter(dbname):
             ICP.set_param(_PARAM_LAST_REPORT, current_key)
 
         # --- 5. POST -----------------------------------------------------
-        url = f"{webhook_base.rstrip('/')}/{org_id}/{sha}"
+        url = f"{webhook_base.rstrip('/')}/{sha}"
         body = {
             "build_url": build_url,
             "stage": stage,
             "build_id": build_id,
             "branch_slug": branch_slug,
+            "repo": repo,
         }
         _logger.info(
-            "[orc_build_reporter] reporting org=%s sha=%s build_id=%s stage=%s",
-            org_id, sha[:8], build_id, stage,
+            "[orc_build_reporter] reporting repo=%s sha=%s build_id=%s stage=%s",
+            repo, sha[:8], build_id, stage,
         )
         r = requests.post(
             url, json=body, timeout=10,
             headers={
-                "User-Agent": "orc-client-build-reporter/1.0",
+                "User-Agent": "orc-client-build-reporter/1.1",
                 "Accept": "application/json",
             },
         )

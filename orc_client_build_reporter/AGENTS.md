@@ -6,9 +6,11 @@ Maintainer guidance for the addon. The user-facing surface lives in
 ## What this addon is for, in one paragraph
 
 A daemon thread that fires once per Odoo registry init and reports
-`(sha, build_id, stage, dev_url, branch_slug)` to AI Workplace's
-public webhook. Workplace stores the mapping so its developer-flow
-agent can derive the right SSH target for a given commit.
+`(sha, build_id, stage, dev_url, branch_slug, repo)` to AI Workplace's
+public webhook. Workplace routes the report to the owning organisation
+by matching `repo` against `organizations.github_repo`. The agent then
+reads from `odoo_sh_builds` to derive the right SSH target for a given
+commit.
 
 ## Key conventions baked into the code
 
@@ -90,16 +92,17 @@ merely existing.
 
 ## Manual smoke test on a real Odoo.sh build
 
-1. Configure `ORG_ID` + `WEBHOOK_BASE` in `models/build_reporter.py`
-   (or set the matching ICP keys) and push.
-2. After the build is up:
+1. (Self-hosters only) Configure `WEBHOOK_BASE` in
+   `models/build_reporter.py` to point at your Workplace deployment.
+2. Push to your dev branch. After the build is up:
 
    ```sql
    -- on AI Workplace's postgres
-   SELECT sha, build_id, stage, dev_url, reported_at
-     FROM odoo_sh_builds
-    WHERE org_id = '<your-org-uuid>'
-    ORDER BY reported_at DESC
+   SELECT b.sha, b.build_id, b.stage, b.dev_url, b.reported_at
+     FROM odoo_sh_builds b
+     JOIN organizations o ON o.id = b.org_id
+    WHERE o.github_repo = '<your-org>/<your-repo>'
+    ORDER BY b.reported_at DESC
     LIMIT 5;
    ```
 
@@ -111,3 +114,24 @@ merely existing.
        "orc_client_build_reporter.last_report_key", False,
    )
    ```
+
+## Manual webhook simulation (no Odoo.sh required)
+
+For local testing of the receiving side without a real build, POST
+a synthetic report directly:
+
+```bash
+SHA=$(git -C path/to/your/repo rev-parse HEAD)
+curl -sS -X POST "https://help.opsway.com/webhook/odoo-sh/build-ready/$SHA" \
+     -H "Content-Type: application/json" \
+     -d "$(cat <<EOF
+{
+  "build_url":   "https://acme-32258372.dev.odoo.com",
+  "stage":       "dev",
+  "build_id":    "32258372",
+  "branch_slug": "acme",
+  "repo":        "your-org/your-repo"
+}
+EOF
+)"
+```

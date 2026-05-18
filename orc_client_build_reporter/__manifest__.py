@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Build Reporter",
-    "version": "18.0.1.0.0",
+    "version": "18.0.1.1.0",
     "summary": (
         "Phones home to AI Workplace on every Odoo.sh registry init so the"
         " developer-flow agent can resolve `(commit sha → build_id, dev"
@@ -21,38 +21,33 @@ What gets sent
 
 ::
 
-    POST {WEBHOOK_BASE}/{ORG_ID}/{sha}
+    POST {WEBHOOK_BASE}/{sha}
     {
         "build_url":   "https://<slug>-<build_id>.dev.odoo.com",
         "stage":       "dev" | "staging" | "production",
         "build_id":    "<digits>",
-        "branch_slug": "<slug>"
+        "branch_slug": "<slug>",
+        "repo":        "<owner>/<name>"
     }
 
-``sha``, ``build_id``, ``branch_slug`` and ``stage`` are all derived
-on the dev server. The only customer-set values are ``ORG_ID`` and
-``WEBHOOK_BASE`` — both PUBLIC identifiers, safe to commit.
+All five body fields are auto-derived on the dev server. The
+receiving Workplace resolves the report's owning organisation by
+matching ``repo`` against its stored ``organizations.github_repo``.
 
 Configuration
 -------------
 
-Edit the constants in ``models/build_reporter.py``:
+The default ``WEBHOOK_BASE`` in ``models/build_reporter.py`` points
+at OpsWay's production AI Workplace. If you self-host, override:
 
 ::
 
-    ORG_ID = "11111111-2222-3333-4444-555555555555"
-    WEBHOOK_BASE = "https://orc.example.com/webhook/odoo-sh/build-ready"
+    WEBHOOK_BASE = "https://your-workplace.example.com/webhook/odoo-sh/build-ready"
 
-Or override at runtime via ``ir.config_parameter``:
-
-::
-
-    orc_client_build_reporter.org_id        ← same as ORG_ID
-    orc_client_build_reporter.webhook_base  ← same as WEBHOOK_BASE
-
-ICP wins when set; in-source constants are the fallback. Commit the
-constants for durability — Odoo.sh "New build" mode wipes ICP between
-builds.
+Or set the ICP key ``orc_client_build_reporter.webhook_base`` at
+runtime. ICP wins when set; in-source constant is the fallback.
+Commit the constant for durability — Odoo.sh "New build" mode wipes
+ICP between builds.
 
 Skip conditions
 ---------------
@@ -63,7 +58,10 @@ Quiet exits (one log line at most) when:
 2. No build_id derivable from ``ODOO_BUILD_URL`` or ``cr.dbname``.
 3. Current commit SHA cannot be derived from the addon's checkout.
 4. Neither in-source constants nor ICP overrides set.
-5. The current ``{sha}:{build_id}:{stage}`` triple was already
+5. The git origin URL doesn't resolve to a GitHub ``owner/repo``
+   shape (self-hosted GitLab and similar — AI Workplace only
+   handles GitHub today).
+6. The current ``{sha}:{build_id}:{stage}`` triple was already
    reported (``last_report_key`` debounce across Odoo workers).
 """,
     "author": "OpsWay",

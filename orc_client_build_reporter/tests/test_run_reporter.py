@@ -41,19 +41,18 @@ class _FakeRegistry:
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
 class TestRunReporter(TransactionCase):
     SHA = "b" * 40
+    REPO = "opsway/pg_group"
     DBNAME = "pg-group-stage-25407779"
     BUILD_ID = "25407779"
     BRANCH_SLUG = "pg-group-stage"
-    ORG_ID = "11111111-2222-3333-4444-555555555555"
     WEBHOOK_BASE = "https://orc.test/webhook/odoo-sh/build-ready"
 
     def setUp(self):
         super().setUp()
         self.ICP = self.env["ir.config_parameter"].sudo()
-        # Use ICP overrides instead of monkey-patching module-level
-        # constants — ICP path is the documented runtime-override
+        # Use ICP override instead of monkey-patching the module-level
+        # constant — ICP path is the documented runtime-override
         # mechanism and exercising it here doubles as coverage.
-        self.ICP.set_param(reporter._PARAM_ORG_ID, self.ORG_ID)
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, self.WEBHOOK_BASE)
         self.ICP.set_param(reporter._PARAM_LAST_REPORT, False)
         self.env.invalidate_all()
@@ -71,7 +70,7 @@ class TestRunReporter(TransactionCase):
             else:
                 os.environ[k] = v
 
-    def _stack_patches(self, *, sha=_UNSET, config_overrides=None):
+    def _stack_patches(self, *, sha=_UNSET, repo=_UNSET, config_overrides=None):
         return [
             mock.patch.object(
                 reporter, "config",
@@ -80,6 +79,10 @@ class TestRunReporter(TransactionCase):
             mock.patch.object(
                 reporter, "get_commit_sha",
                 return_value=self.SHA if sha is _UNSET else sha,
+            ),
+            mock.patch.object(
+                reporter, "get_repo_from_git",
+                return_value=self.REPO if repo is _UNSET else repo,
             ),
             mock.patch.object(
                 reporter, "Registry",
@@ -116,14 +119,14 @@ class TestRunReporter(TransactionCase):
 
         m_post.assert_called_once()
         args, kwargs = m_post.call_args
-        self.assertEqual(
-            args[0],
-            f"{self.WEBHOOK_BASE}/{self.ORG_ID}/{self.SHA}",
-        )
+        # URL: {webhook_base}/{sha}   (no org_id — repo lives in body)
+        self.assertEqual(args[0], f"{self.WEBHOOK_BASE}/{self.SHA}")
+
         body = kwargs["json"]
         self.assertEqual(body["build_id"], self.BUILD_ID)
         self.assertEqual(body["branch_slug"], self.BRANCH_SLUG)
         self.assertEqual(body["stage"], "dev")  # default when ODOO_STAGE unset
+        self.assertEqual(body["repo"], self.REPO)
         self.assertEqual(
             body["build_url"],
             f"https://{self.BRANCH_SLUG}-{self.BUILD_ID}.dev.odoo.com",
@@ -158,6 +161,7 @@ class TestRunReporter(TransactionCase):
         self.assertEqual(body["build_id"], "32258372")
         self.assertEqual(body["branch_slug"], "pg-group-feature-pg-460-ai")
         self.assertEqual(body["stage"], "dev")
+        self.assertEqual(body["repo"], self.REPO)
         self.assertEqual(
             body["build_url"],
             "https://pg-group-feature-pg-460-ai-32258372.dev.odoo.com",
@@ -186,14 +190,6 @@ class TestRunReporter(TransactionCase):
     def test_skip_when_dbname_has_no_build_id(self):
         self._run_and_assert_no_post("local-dev", self._stack_patches())
 
-    def test_skip_when_org_id_missing(self):
-        self.ICP.set_param(reporter._PARAM_ORG_ID, False)
-        self.env.invalidate_all()
-        # Ensure the module-level fallback is empty too so a real
-        # ORG_ID baked in by a fork doesn't rescue this test.
-        with mock.patch.object(reporter, "ORG_ID", ""):
-            self._run_and_assert_no_post(self.DBNAME, self._stack_patches())
-
     def test_skip_when_webhook_base_missing(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, False)
         self.env.invalidate_all()
@@ -203,6 +199,11 @@ class TestRunReporter(TransactionCase):
     def test_skip_when_sha_unknown(self):
         self._run_and_assert_no_post(
             self.DBNAME, self._stack_patches(sha=None),
+        )
+
+    def test_skip_when_repo_unknown(self):
+        self._run_and_assert_no_post(
+            self.DBNAME, self._stack_patches(repo=None),
         )
 
     # --- Debounce ----------------------------------------------------------
