@@ -89,14 +89,14 @@ class ResUsers(models.Model):
         ),
     )
 
-    @api.depends("groups_id")
+    @api.depends("group_ids")
     def _compute_orc_is_manager(self):
         group = self.env.ref(
             "orc_client_provisioning.group_orc_manager",
             raise_if_not_found=False,
         )
         for user in self:
-            user.orc_is_manager = bool(group and group in user.groups_id)
+            user.orc_is_manager = bool(group and group in user.group_ids)
 
     # --- Provisioning lifecycle ------------------------------------------------
 

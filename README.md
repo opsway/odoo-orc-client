@@ -1,6 +1,6 @@
 # odoo-orc-client
 
-Odoo 18 addons that connect a client's Odoo instance to the OpsWay ORC
+Odoo 19 addons that connect a client's Odoo instance to the OpsWay ORC
 (OpenACP Reasoning Cloud) platform.
 
 Two addons, meant to be installed in order:
@@ -31,7 +31,7 @@ the parent repo. See `../docs/` there for endpoint contracts.
 
 ## Requirements
 
-- Odoo 18.0 or later
+- Odoo 19.0 or later
 - Outbound HTTPS from the Odoo instance to the ORC endpoint
 - ORC-side `odoo-client`-scoped org API token (minted by OpsWay super-admin
   via `orc_api_tokens.scopes @> ARRAY['odoo-client']`)

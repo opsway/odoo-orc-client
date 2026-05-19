@@ -206,7 +206,7 @@ class TestReconcileDrift(TransactionCase):
         """Manager group no longer auto-promotes to ORC admin —
         addon always sends role='user'."""
         manager_group = self.env.ref("orc_client_provisioning.group_orc_manager")
-        self.user.sudo().write({"groups_id": [(4, manager_group.id)]})
+        self.user.sudo().write({"group_ids": [(4, manager_group.id)]})
         self.user.invalidate_recordset()
         self.assertTrue(self.user.orc_is_manager)
 

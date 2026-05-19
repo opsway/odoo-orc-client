@@ -7,7 +7,7 @@ repo, not here.
 
 ## What this module is
 
-A self-contained Odoo 18 addon that:
+A self-contained Odoo 19 addon that:
 1. Listens to `create`/`write` on configured models.
 2. Enqueues a reindex marker per affected record.
 3. A cron sweeps the queue, calls the configured embedding provider,
@@ -46,7 +46,7 @@ implementation**. Apply the same order when adding to it:
 
 ## Coding conventions
 
-- **Manifest**: `version` follows Odoo's `18.0.X.Y` pattern, same as
+- **Manifest**: `version` follows Odoo's `19.0.X.Y` pattern, same as
   the sibling addons in this repo.
 - **License**: LGPL-3, matching the parent repo.
 - **Logger**: one logger per module file via

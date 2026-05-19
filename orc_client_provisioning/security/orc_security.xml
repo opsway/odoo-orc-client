@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <record id="orc_privilege" model="res.groups.privilege">
+        <field name="name">AI Workplace</field>
+        <field name="category_id" ref="base.module_category_administration"/>
+        <field name="sequence">10</field>
+    </record>
+
     <record id="group_orc_manager" model="res.groups">
         <field name="name">AI Workplace Manager</field>
-        <field name="category_id" ref="base.module_category_administration"/>
+        <field name="privilege_id" ref="orc_client_provisioning.orc_privilege"/>
         <field name="comment">Can enable / disable AI Workplace access for users and inspect the audit log.</field>
     </record>
 
