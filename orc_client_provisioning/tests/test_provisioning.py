@@ -189,9 +189,87 @@ class TestOrcProvisioning(TransactionCase):
         })
         self.assertEqual(admin._orc_effective_email(), "admin_test_orc@myco.odoo.com")
 
+    # -- Plan §9 + task 63 — login-change guard rails --------------------------
+
+    def test_orc_provisionable_true_for_non_empty_login(self):
+        """`orc_provisionable` is the precondition for toggling
+        `orc_enabled` on (the view binds `readonly` to its negation).
+        Every persisted user has a non-empty login (NOT NULL at the
+        DB level), so the field is True in practice — the gate is
+        defensive."""
+        self.assertTrue(self.user.orc_provisionable)
+
+    def test_write_changing_login_forces_orc_enabled_off(self):
+        """Plan §9.3 — the (pinned_org_id, odoo_login) gateway key
+        assumes a stable login.  A scripted / XML-RPC write that
+        changes `login` while orc_enabled was True must have
+        orc_enabled silently flipped to False so the next reconcile
+        cron doesn't silently re-provision under the new login (which
+        would mint a NEW gateway-side user and leak the prior
+        identity).  Admin must consciously re-enable."""
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_enabled)
+        prior_uid = self.user.orc_user_id
+        self.assertTrue(prior_uid)
+
+        # Write that changes login.  No need to mock the client — the
+        # write override must short-circuit before any provisioning.
+        with self._patch_client():
+            self.user.sudo().write({"login": "renamed@acme.test"})
+
+        self.user.invalidate_recordset()
+        self.assertFalse(self.user.orc_enabled)
+        # Breadcrumb retained — re-enabling re-provisions cleanly
+        # against the new login.
+        self.assertEqual(self.user.orc_user_id, prior_uid)
+
+    def test_write_no_login_change_preserves_orc_enabled(self):
+        """The login-change guard only fires on an actual change.
+        Writing the same login back is a no-op for orc_enabled."""
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+
+        # Same value — guard must NOT trip.
+        with self._patch_client():
+            self.user.sudo().write({"login": self.user.login})
+
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_enabled)
+
+    def test_write_combined_login_change_plus_orc_enabled_true_is_rewritten(self):
+        """The override mutates `vals` in place when the caller tries
+        to flip `orc_enabled=True` and change the login in the same
+        write.  Both happen on the next save: login is changed,
+        orc_enabled stays False, no provisioning fires."""
+        provision_calls: list[dict] = []
+
+        def capture_provision(**kw):
+            provision_calls.append(kw)
+            return "orc-uid-renamed"
+
+        with self._patch_client(provision_user=capture_provision):
+            self.user.sudo().write({
+                "login": "renamed@acme.test",
+                "orc_enabled": True,
+            })
+
+        self.user.invalidate_recordset()
+        self.assertEqual(self.user.login, "renamed@acme.test")
+        self.assertFalse(self.user.orc_enabled)
+        self.assertEqual(provision_calls, [])  # never invoked
+
     def test_provision_bare_login_sends_qualified_email(self):
         """Bare login users must be provisioned with a qualified email so
-        'admin' on two different Odoo instances does not collide in the gateway."""
+        'admin' on two different Odoo instances does not collide in the gateway.
+
+        Task 63 — `provision_user` now takes `odoo_login` (the per-org
+        identity key on the gateway side, plan §3) instead of `email`.
+        The VALUE stays the qualified email; only the field name changes.
+        `email` continues to ship as optional display metadata.
+        """
         icp = self.env["ir.config_parameter"].sudo()
         icp.set_param("web.base.url", "https://myco.odoo.com")
         admin = self.env["res.users"].create({
@@ -215,7 +293,16 @@ class TestOrcProvisioning(TransactionCase):
             admin.orc_enabled = True
 
         self.assertEqual(len(provision_calls), 1)
-        self.assertEqual(provision_calls[0]["email"], "admin_test_orc@myco.odoo.com")
+        # Task 63 — odoo_login is the per-org key; same value as the
+        # qualified email so the gateway-side identity is stable for
+        # existing deployments.
+        self.assertEqual(
+            provision_calls[0]["odoo_login"], "admin_test_orc@myco.odoo.com",
+        )
+        # `email` ships as display metadata, optional.
+        self.assertEqual(
+            provision_calls[0]["email"], "admin_test_orc@myco.odoo.com",
+        )
 
         self.assertEqual(len(push_calls), 1)
         # Gateway identity uses qualified email; Odoo API auth uses bare login.
