@@ -47,6 +47,7 @@ import os
 import re
 import subprocess
 import threading
+from urllib.parse import urlparse
 
 import requests
 
@@ -141,7 +142,6 @@ def parse_dev_url(build_url):
     """Returns (branch_slug, build_id) if `build_url` is a canonical
     Odoo.sh dev hostname, else None."""
     try:
-        from urllib.parse import urlparse
         parsed = urlparse(build_url)
     except Exception:
         return None
