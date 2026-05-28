@@ -488,19 +488,28 @@ class ResUsers(models.Model):
             for u in data.get("users", [])
             if u.get("email")
         }
-        # Build local index keyed by gateway identity.  For users that
-        # have not yet had orc_gateway_email populated (provisioned before
-        # this field existed), also register the computed effective email
-        # as a secondary candidate so the heal write below can find them
-        # regardless of which form the gateway actually stored.
+        # Build local index keyed by gateway identity, exactly one key
+        # per user. Legacy users without a stored orc_gateway_email may
+        # live on the gateway under either their raw login or the
+        # qualified "login@host" form; register only the alias the remote
+        # actually knows. Registering both would make the same user appear
+        # "in sync" under one alias and "missing" under the other, and the
+        # missing branch would re-provision a duplicate qualified identity.
         local_by_email = {}
         for u in local_enabled:
             gw_id = u._orc_gateway_identity()   # orc_gateway_email or login
-            local_by_email[gw_id] = u
-            if not u.orc_gateway_email:
-                eff = u._orc_effective_email()
-                if eff != gw_id:
-                    local_by_email.setdefault(eff, u)
+            if u.orc_gateway_email:
+                local_by_email[gw_id] = u
+                continue
+            eff = u._orc_effective_email()
+            if gw_id in remote_users:
+                local_by_email[gw_id] = u
+            elif eff in remote_users:
+                local_by_email[eff] = u
+            else:
+                # Absent on the gateway → provision under the canonical
+                # qualified form that action_orc_provision() pushes.
+                local_by_email.setdefault(eff, u)
 
         # Direction A — local enabled, sync forward.
         for email, user in local_by_email.items():
