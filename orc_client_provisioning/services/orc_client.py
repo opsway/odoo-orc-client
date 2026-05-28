@@ -112,19 +112,47 @@ class OrcClientConfig(models.AbstractModel):
         return True
 
     @api.model
-    def provision_user(self, *, email: str, name: str, role: str = "user") -> str:
-        """Create the user + membership in AI Workplace. Returns user_id.
+    def provision_user(
+        self,
+        *,
+        odoo_login: str,
+        name: str,
+        email: str | None = None,
+    ) -> str:
+        """Create the org_user in AI Workplace. Returns user_id.
 
-        Password is random and never shown — the user will only ever
-        sign in via SSO handoff. Synapse holds the hash but no login
-        path on the Odoo side ever issues it.
+        Two-namespace contract (gateway plan §3 + §9):
+
+          - ``odoo_login`` is the per-org identity key (the gateway
+            stores it on ``users.odoo_login`` and matches the Odoo
+            iframe SSO requests against it).  May or may not contain
+            an ``@``; the gateway takes it verbatim because Odoo
+            ``res.users.login`` is case-sensitive and may be a bare
+            string like ``"admin"``.
+          - ``email`` is optional metadata.  When set, the gateway
+            stamps it on ``users.email`` for display; not used as a
+            lookup key.  Pass it alongside ``odoo_login`` so the AI
+            Workplace UI can render a recognisable email column.
+
+        The addon always provisions ``role='member'`` server-side —
+        admins are platform_user identities granted via the AI
+        Workplace dashboard's invite flow, not by Odoo (plan §9.1).
+        We don't pass a ``role`` field at all; the server defaults
+        to member and rejects ``role='admin'`` on this path.
+
+        Password is random and never shown — the user signs in via
+        the SSO handoff.  Synapse holds the hash but no login path
+        on the Odoo side ever issues it.
         """
         password = secrets.token_urlsafe(32)
-        data = self._request(
-            "POST",
-            "/api/admin/users",
-            json_body={"email": email, "name": name, "role": role, "password": password},
-        )
+        body: dict = {
+            "odoo_login": odoo_login,
+            "name": name,
+            "password": password,
+        }
+        if email:
+            body["email"] = email
+        data = self._request("POST", "/api/admin/users", json_body=body)
         user_id = data.get("user_id")
         if not user_id:
             raise UserError(_("AI Workplace provisioning returned no user_id"))

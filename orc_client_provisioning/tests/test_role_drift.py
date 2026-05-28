@@ -202,18 +202,22 @@ class TestReconcileDrift(TransactionCase):
         self.assertTrue(log)
         self.assertIn("upstream 500", log.error)
 
-    def test_addon_provisions_as_user_regardless_of_manager_group(self):
-        """Manager group no longer auto-promotes to ORC admin —
-        addon always sends role='user'."""
+    def test_addon_never_sends_role_parameter_to_provision_user(self):
+        """Plan §9.1 + task 63 — the addon dropped the `role` parameter.
+        Admin / non-admin promotion is a platform_user concern handled
+        by the AI Workplace dashboard's invite flow; the addon always
+        provisions org_users (members) on the server side.  Manager
+        group still drives view affordances (orc_is_manager) but does
+        NOT escalate the gateway role."""
         manager_group = self.env.ref("orc_client_provisioning.group_orc_manager")
         self.user.sudo().write({"groups_id": [(4, manager_group.id)]})
         self.user.invalidate_recordset()
         self.assertTrue(self.user.orc_is_manager)
 
-        calls = {"role": None}
+        calls = {"kwargs": None}
 
         def fake_provision(**kw):
-            calls["role"] = kw.get("role")
+            calls["kwargs"] = kw
             return "orc-uid-1"
 
         with patch.multiple(
@@ -223,7 +227,12 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.user.action_orc_provision()
 
-        self.assertEqual(calls["role"], "user")
+        # Positive: odoo_login + name are passed; email is the
+        # qualified form for display.
+        self.assertIn("odoo_login", calls["kwargs"])
+        self.assertIn("name", calls["kwargs"])
+        # Negative: `role` is gone from the signature.
+        self.assertNotIn("role", calls["kwargs"])
 
     # ---- _cron_orc_rotate_keys -------------------------------------------
     # The daily maintenance cron rotates keys past their TTL via

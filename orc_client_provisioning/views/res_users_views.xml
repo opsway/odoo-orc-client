@@ -8,7 +8,18 @@
             <xpath expr="//notebook" position="inside">
                 <page string="AI Workplace" name="orc_access" groups="orc_client_provisioning.group_orc_manager">
                     <group>
-                        <field name="orc_enabled"/>
+                        <field name="orc_provisionable" invisible="1"/>
+                        <!-- Plan §9 + task 63: the (pinned_org_id, odoo_login)
+                             gateway key requires a non-empty login. Empty-login
+                             accounts are technically impossible in stock Odoo
+                             (login is NOT NULL), but the explicit gate
+                             documents the precondition + future-proofs against
+                             Odoo versions that relax the constraint. -->
+                        <field
+                            name="orc_enabled"
+                            readonly="not orc_provisionable"
+                            help="Requires a non-empty Odoo login."
+                        />
                         <field name="orc_is_manager" invisible="1"/>
                         <field name="orc_last_sync_at" readonly="1" invisible="not orc_enabled"/>
                         <field

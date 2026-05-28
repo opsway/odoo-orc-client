@@ -164,14 +164,14 @@ class TestOrcClientTasksExt(TransactionCase):
                    new=fake_request):
             self.env["orc.client"].mint_sso_nonce(
                 email="alice@acme.test",
-                return_to="/dashboard/tasks/%21abc%3Ahost?embed=1",
+                return_to="/tasks/%21abc%3Ahost?embed=1",
             )
 
         self.assertEqual(
             captured["json_body"],
             {
                 "email": "alice@acme.test",
-                "return_to": "/dashboard/tasks/%21abc%3Ahost?embed=1",
+                "return_to": "/tasks/%21abc%3Ahost?embed=1",
             },
         )
 
@@ -263,7 +263,7 @@ class TestOrcClientTasksExt(TransactionCase):
         room_id = "!abc:host"
         url = self.env["orc.client"]._build_embed_return_to(room_id)
         self.assertEqual(
-            url, "/dashboard/tasks/%21abc%3Ahost?embed=1&theme=dark",
+            url, "/tasks/%21abc%3Ahost?embed=1&theme=dark",
         )
 
     def test_embed_return_to_appends_light_when_admin_sets_light(self):

@@ -88,6 +88,24 @@ class ResUsers(models.Model):
             "identity stays stable even if the qualification logic changes."
         ),
     )
+    # Plan §9 + task 63 — gate enrolment on a non-empty Odoo login.
+    # Odoo's res.users.login is a required field at the DB level
+    # (NOT NULL), so the computed value is True for every persisted
+    # user.  The gate primarily exists to (a) document the
+    # precondition in the UI, (b) protect against future Odoo
+    # versions that relax the NOT NULL, and (c) give the form view
+    # an attribute to bind `readonly` on.  An empty/null login
+    # would be an invalid (pinned_org_id, odoo_login) key on the
+    # gateway side and break the iframe SSO lookup.
+    orc_provisionable = fields.Boolean(
+        string="Provisionable",
+        compute="_compute_orc_provisionable",
+        help=(
+            "True when the user has a non-empty Odoo login that can be "
+            "used as the AI Workplace per-org identity key. Required "
+            "before the AI Workplace access checkbox can be toggled on."
+        ),
+    )
 
     @api.depends("groups_id")
     def _compute_orc_is_manager(self):
@@ -97,6 +115,33 @@ class ResUsers(models.Model):
         )
         for user in self:
             user.orc_is_manager = bool(group and group in user.groups_id)
+
+    @api.depends("login")
+    def _compute_orc_provisionable(self):
+        for user in self:
+            user.orc_provisionable = bool((user.login or "").strip())
+
+    # --- Login-change guard (plan §9.2 + §9.3) ---------------------------------
+    #
+    # The (pinned_org_id, odoo_login) gateway identity assumes a stable
+    # login string.  Renaming a user's Odoo login while orc_enabled=True
+    # would (a) silently mint a NEW gateway-side user row on the next
+    # reconcile under the new login, leaking the prior identity, and
+    # (b) leave the prior row dangling with no Odoo counterpart.  Both
+    # branches force orc_enabled off on login change so the admin
+    # consciously re-enables (which then re-provisions cleanly).
+    #
+    # onchange is the client-side hint (drops the checkbox in the UI as
+    # soon as the login field changes).  The write() override below is
+    # the server-side enforcement — onchange is only fired by the form
+    # view, so an XML-RPC or scripted write that flips login + leaves
+    # orc_enabled=True in the same call needs the server guard too.
+
+    @api.onchange("login")
+    def _onchange_login_clear_orc_enabled(self):
+        for user in self:
+            if user.orc_enabled:
+                user.orc_enabled = False
 
     # --- Provisioning lifecycle ------------------------------------------------
 
@@ -137,14 +182,6 @@ class ResUsers(models.Model):
         """
         self.ensure_one()
         return self.orc_gateway_email or self.login
-
-    def _orc_desired_role(self) -> str:
-        """The addon only provisions ``member`` — admin promotion
-        happens in the AI Workplace dashboard, not here. The
-        ``orc_is_manager`` flag still drives view affordances but
-        no longer auto-promotes the user to AI Workplace admin.
-        """
-        return "member"
 
     def _orc_generate_api_key(self):
         """Generate a new Odoo API key for this user, tagged as AI Workplace-managed."""
@@ -215,17 +252,28 @@ class ResUsers(models.Model):
             old_key_row = user.orc_api_key_id
 
             try:
-                # 2. Ensure user exists in AI Workplace with the right role.
-                # Role is derived from group membership: AI Workplace-manager
-                # group → admin; everyone else → user. provision_user
-                # is idempotent on the AI Workplace side, so calling it on
-                # every run keeps role in sync.
-                desired_role = user._orc_desired_role()
+                # 2. Ensure the org_user exists in AI Workplace.  Two-
+                # namespace model (plan §1 + §9): the addon only ever
+                # creates org_users (members); admin promotion is a
+                # platform_user concern handled by the dashboard's
+                # invite flow.  No `role` parameter is sent — the
+                # server defaults to member and rejects role=admin on
+                # this path.
+                #
+                # `odoo_login` is the per-org identity key on the
+                # gateway side.  We send the qualified
+                # `_orc_effective_email` so bare logins (e.g. "admin")
+                # don't collide across Odoo instances when the user
+                # shows up in the dashboard.  The optional `email`
+                # field carries the same value as display metadata.
+                # provision_user is idempotent on (pinned_org_id,
+                # odoo_login), so re-calls on every cron tick are
+                # cheap.
                 eff_email = user._orc_effective_email()
                 orc_uid = client.provision_user(
-                    email=eff_email,
+                    odoo_login=eff_email,
                     name=user.name or user.login,
-                    role=desired_role,
+                    email=eff_email,
                 )
                 if not user.orc_user_id:
                     user.sudo().write({"orc_user_id": orc_uid})
@@ -322,6 +370,19 @@ class ResUsers(models.Model):
     _ORC_INFLIGHT_CTX = "orc_provisioning_inflight"
 
     def write(self, vals):
+        # Plan §9.3 server-side guard: a write that changes `login`
+        # AND tries to keep / flip `orc_enabled=True` is rewritten to
+        # clear orc_enabled.  The onchange above handles the form UX;
+        # this handles scripted / XML-RPC writes that bypass onchange.
+        # We mutate the incoming `vals` so the in-flight save (and
+        # any downstream code that reads vals) sees the corrected
+        # shape.
+        if "login" in vals:
+            for user in self:
+                if user.login != vals["login"] and user.orc_enabled:
+                    vals = {**vals, "orc_enabled": False}
+                    break
+
         if (
             "orc_enabled" not in vals
             or self.env.context.get(self._ORC_INFLIGHT_CTX)
