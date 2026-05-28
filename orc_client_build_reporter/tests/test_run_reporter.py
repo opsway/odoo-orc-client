@@ -305,3 +305,36 @@ class TestRunReporter(TransactionCase):
                 reporter._run_reporter(self.DBNAME)
             except Exception as e:
                 self.fail(f"_run_reporter raised: {e!r}")
+
+    def test_failed_post_does_not_stamp_so_next_run_retries(self):
+        """A webhook failure must NOT persist the debounce key: the next
+        registry restart re-POSTs the same {sha,build_id,stage}. Stamping
+        before the POST (the pre-fix bug) committed the key on cursor exit,
+        so any transient timeout / non-2xx silently suppressed the
+        advertised retry-on-next-restart path."""
+        self._start(self._stack_patches())
+        bad = mock.Mock()
+        bad.raise_for_status = mock.Mock(
+            side_effect=Exception("503 ServiceUnavailable"),
+        )
+        with mock.patch.object(
+            reporter.requests, "post",
+            side_effect=[bad, self._fake_response()],
+        ) as m_post:
+            reporter._run_reporter(self.DBNAME)   # fails → must not stamp
+            self.env.invalidate_all()
+            self.assertFalse(
+                self.ICP.get_param(reporter._PARAM_LAST_REPORT),
+                "debounce key must not be stamped after a failed POST",
+            )
+            reporter._run_reporter(self.DBNAME)   # retries
+
+        self.assertEqual(
+            m_post.call_count, 2,
+            "the run after a failed POST must retry, not skip",
+        )
+        self.env.invalidate_all()
+        self.assertEqual(
+            self.ICP.get_param(reporter._PARAM_LAST_REPORT),
+            f"{self.SHA}:{self.BUILD_ID}:dev",
+        )

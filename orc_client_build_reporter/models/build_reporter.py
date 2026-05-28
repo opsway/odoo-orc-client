@@ -213,7 +213,7 @@ def _run_reporter(dbname):
         # --- 3. Stage detection ------------------------------------------
         stage = get_stage()
 
-        # --- 4. Config + debounce ----------------------------------------
+        # --- 4. Config + debounce check ----------------------------------
         with Registry(dbname).cursor() as cr:
             env = api.Environment(cr, SUPERUSER_ID, {})
             webhook_base = _resolve_webhook_base(env)
@@ -236,7 +236,10 @@ def _run_reporter(dbname):
                     current_key, _PARAM_LAST_REPORT,
                 )
                 return
-            ICP.set_param(_PARAM_LAST_REPORT, current_key)
+            # The debounce key is stamped only after the POST succeeds
+            # (step 6). Stamping here would commit on cursor exit before
+            # the webhook call, so a timeout/non-2xx would permanently
+            # suppress the retry-on-next-restart path.
 
         # --- 5. POST -----------------------------------------------------
         url = f"{webhook_base.rstrip('/')}/{sha}"
@@ -263,6 +266,13 @@ def _run_reporter(dbname):
             "[orc_build_reporter] reported: %s",
             (r.text or "").strip()[:200],
         )
+
+        # --- 6. Debounce stamp (only on confirmed success) ---------------
+        with Registry(dbname).cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            env["ir.config_parameter"].sudo().set_param(
+                _PARAM_LAST_REPORT, current_key,
+            )
     except Exception as e:
         _logger.warning("[orc_build_reporter] failed: %s", e)
 
