@@ -235,10 +235,15 @@ class OrcClientConfig(models.AbstractModel):
             "X-Browser-User-Agent": browser_user_agent,
             "X-Browser-IP": browser_ip,
         }
+        # Send the identity as `odoo_login` (verbatim) so orc-app matches
+        # users.odoo_login case-sensitively. The legacy `email` field is
+        # lowercased server-side before the lookup, which silently fails
+        # for Odoo logins with uppercase chars (e.g. "Admin@host"). Keep
+        # `email` for older orc-app builds that only read that field.
         return self._request(
             "POST",
             "/api/addon/sso-exchange",
-            json_body={"email": email},
+            json_body={"odoo_login": email, "email": email},
             extra_headers=extra,
         )
 

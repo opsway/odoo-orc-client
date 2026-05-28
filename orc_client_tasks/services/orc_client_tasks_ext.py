@@ -109,7 +109,12 @@ class OrcClientTasksExt(models.AbstractModel):
         surfaces as a UserError raised by ``_request`` (AI Workplace
         returns 400).
         """
-        body: dict = {"email": email}
+        # Send the identity as `odoo_login` (verbatim) so orc-app matches
+        # users.odoo_login case-sensitively. The legacy `email` field is
+        # lowercased server-side before the lookup, which silently fails
+        # for Odoo logins with uppercase chars (e.g. "Admin@host"). Keep
+        # `email` for older orc-app builds that only read that field.
+        body: dict = {"odoo_login": email, "email": email}
         if return_to:
             body["return_to"] = return_to
         if lang:
