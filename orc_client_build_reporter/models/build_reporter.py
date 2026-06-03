@@ -257,7 +257,7 @@ def _run_reporter(dbname):
         r = requests.post(
             url, json=body, timeout=10,
             headers={
-                "User-Agent": "orc-client-build-reporter/1.1",
+                "User-Agent": "orc-client-build-reporter/1.0",
                 "Accept": "application/json",
             },
         )

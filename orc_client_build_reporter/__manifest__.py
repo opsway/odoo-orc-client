@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Build Reporter",
-    "version": "18.0.1.1.0",
+    "version": "19.0.1.0.0",
     "summary": (
         "Phones home to AI Workplace on every Odoo.sh registry init so the"
         " developer-flow agent can resolve `(commit sha → build_id, dev"

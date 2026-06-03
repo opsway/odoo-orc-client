@@ -87,7 +87,7 @@ merely existing.
 - No retries — if the POST fails, the next restart re-attempts. The
   `last_report_key` debounce ensures one post per
   `{sha}:{build_id}:{stage}`.
-- Manifest version is `"18.0.1.0.0"` (matches the family's
+- Manifest version is `"19.0.1.0.0"` (matches the family's
   `<odoo>.<feature>.<minor>.<patch>` scheme).
 
 ## Manual smoke test on a real Odoo.sh build
