@@ -202,18 +202,22 @@ class TestReconcileDrift(TransactionCase):
         self.assertTrue(log)
         self.assertIn("upstream 500", log.error)
 
-    def test_addon_provisions_as_user_regardless_of_manager_group(self):
-        """Manager group no longer auto-promotes to ORC admin —
-        addon always sends role='user'."""
+    def test_addon_never_sends_role_parameter_to_provision_user(self):
+        """Plan §9.1 + task 63 — the addon dropped the `role` parameter.
+        Admin / non-admin promotion is a platform_user concern handled
+        by the AI Workplace dashboard's invite flow; the addon always
+        provisions org_users (members) on the server side.  Manager
+        group still drives view affordances (orc_is_manager) but does
+        NOT escalate the gateway role."""
         manager_group = self.env.ref("orc_client_provisioning.group_orc_manager")
         self.user.sudo().write({"group_ids": [(4, manager_group.id)]})
         self.user.invalidate_recordset()
         self.assertTrue(self.user.orc_is_manager)
 
-        calls = {"role": None}
+        calls = {"kwargs": None}
 
         def fake_provision(**kw):
-            calls["role"] = kw.get("role")
+            calls["kwargs"] = kw
             return "orc-uid-1"
 
         with patch.multiple(
@@ -223,7 +227,12 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.user.action_orc_provision()
 
-        self.assertEqual(calls["role"], "user")
+        # Positive: odoo_login + name are passed; email is the
+        # qualified form for display.
+        self.assertIn("odoo_login", calls["kwargs"])
+        self.assertIn("name", calls["kwargs"])
+        # Negative: `role` is gone from the signature.
+        self.assertNotIn("role", calls["kwargs"])
 
     # ---- _cron_orc_rotate_keys -------------------------------------------
     # The daily maintenance cron rotates keys past their TTL via
@@ -344,6 +353,46 @@ class TestReconcileDrift(TransactionCase):
 
         bare.invalidate_recordset()
         self.assertEqual(bare.orc_gateway_email, qualified)
+
+    def test_reconcile_qualified_form_does_not_duplicate_provision(self):
+        """Regression: a legacy bare-login user whose gateway record lives
+        under the qualified email must be healed via that single alias —
+        NOT also indexed under the bare login and re-provisioned. The
+        pre-fix index registered BOTH aliases, so the bare alias missed
+        the remote and fell through to action_orc_provision(), minting a
+        second qualified identity for the same local user."""
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("web.base.url", "https://myco.odoo.com")
+        bare = self._make_bare_login_user()
+        qualified = bare._orc_effective_email()
+
+        calls = {"provision": 0}
+
+        def spy_provision(**kw):
+            calls["provision"] += 1
+            return "orc-uid-dup"
+
+        with patch.multiple(
+            self.env["orc.client"],
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user"},
+                    {"email": qualified, "role": "user"},   # qualified only
+                ],
+                "infrastructures": [],
+            },
+            provision_user=spy_provision,
+            push_odoo_key=lambda **kw: None,
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.assertEqual(
+            calls["provision"], 0,
+            "the bare alias must not trigger a duplicate provision",
+        )
+        bare.invalidate_recordset()
+        self.assertEqual(bare.orc_gateway_email, qualified)
+        self.assertEqual(bare.orc_last_sync_status, "ok")
 
     def test_cron_orc_sync_runs_reconcile(self):
         with patch.multiple(

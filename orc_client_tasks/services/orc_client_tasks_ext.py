@@ -87,10 +87,10 @@ class OrcClientTasksExt(models.AbstractModel):
         """Phase 2a override that supports the optional return_to.
 
         Phase 1's implementation didn't pass return_to, so a nonce
-        minted via the Phase 1 call would redirect to /dashboard after
-        consume. Phase 2a wants to land inside
-        ``/dashboard/tasks/{room_id}?embed=1`` for the iframe body,
-        which is what return_to carries.
+        minted via the Phase 1 call would redirect to the AI Workplace
+        root after consume. Phase 2a wants to land inside
+        ``/tasks/{room_id}?embed=1`` for the iframe body, which is
+        what return_to carries.
 
         Browser context (UA + IP) is forwarded via X-Browser-* headers
         the same way Phase 1 does; without it the redeem check would
@@ -105,10 +105,16 @@ class OrcClientTasksExt(models.AbstractModel):
         ship German messages is harmless.
 
         Server re-validates the prefix on the exchange and consume
-        paths (/dashboard/ only). Passing an invalid path surfaces as
-        a UserError raised by ``_request`` (AI Workplace returns 400).
+        paths (must start with ``/``). Passing an invalid path
+        surfaces as a UserError raised by ``_request`` (AI Workplace
+        returns 400).
         """
-        body: dict = {"email": email}
+        # Send the identity as `odoo_login` (verbatim) so orc-app matches
+        # users.odoo_login case-sensitively. The legacy `email` field is
+        # lowercased server-side before the lookup, which silently fails
+        # for Odoo logins with uppercase chars (e.g. "Admin@host"). Keep
+        # `email` for older orc-app builds that only read that field.
+        body: dict = {"odoo_login": email, "email": email}
         if return_to:
             body["return_to"] = return_to
         if lang:
@@ -150,4 +156,4 @@ class OrcClientTasksExt(models.AbstractModel):
         )
         if theme not in EMBED_THEME_VALID:
             theme = EMBED_THEME_DEFAULT
-        return f"/dashboard/tasks/{encoded}?embed=1&theme={theme}"
+        return f"/tasks/{encoded}?embed=1&theme={theme}"

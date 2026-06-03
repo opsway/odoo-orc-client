@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Tasks",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.0.1",
     "summary": (
         "In-Odoo chat dock for AI Workplace: task-list systray + Discuss-style"
         " foldable windows embedding AI Workplace chat via SSO."
@@ -14,7 +14,7 @@ Depends on ``orc_client_provisioning``. Adds:
 - A systray button listing the user's AI Workplace tasks.
 - A Discuss-lookalike dock at the bottom-right that holds foldable
   chat windows — each window is an iframe into
-  ``/dashboard/tasks/{room_id}?embed=1`` on AI Workplace, signed in via the
+  ``/tasks/{room_id}?embed=1`` on AI Workplace, signed in via the
   one-time SSO nonce the addon mints server-to-server.
 - Odoo-side proxy controllers that forward task-list and task-create
   calls to AI Workplace with Bearer + X-Acting-User.

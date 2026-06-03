@@ -150,7 +150,10 @@ class TestOrcClientTasksExt(TransactionCase):
                    new=fake_request):
             self.env["orc.client"].mint_sso_nonce(email="alice@acme.test")
 
-        self.assertEqual(captured["json_body"], {"email": "alice@acme.test"})
+        self.assertEqual(
+            captured["json_body"],
+            {"odoo_login": "alice@acme.test", "email": "alice@acme.test"},
+        )
         self.assertNotIn("return_to", captured["json_body"])
 
     def test_mint_sso_nonce_with_return_to_passes_field(self):
@@ -164,16 +167,34 @@ class TestOrcClientTasksExt(TransactionCase):
                    new=fake_request):
             self.env["orc.client"].mint_sso_nonce(
                 email="alice@acme.test",
-                return_to="/dashboard/tasks/%21abc%3Ahost?embed=1",
+                return_to="/tasks/%21abc%3Ahost?embed=1",
             )
 
         self.assertEqual(
             captured["json_body"],
             {
+                "odoo_login": "alice@acme.test",
                 "email": "alice@acme.test",
-                "return_to": "/dashboard/tasks/%21abc%3Ahost?embed=1",
+                "return_to": "/tasks/%21abc%3Ahost?embed=1",
             },
         )
+
+    def test_mint_sso_nonce_sends_uppercase_identity_verbatim_as_odoo_login(self):
+        """orc-app lowercases the legacy `email` field before the exact
+        users.odoo_login lookup, so an uppercase Odoo login (provisioned
+        verbatim, e.g. "Admin@host") would miss. The identity must ride
+        in `odoo_login`, passed through case-preserving."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "nonce": "n6", "url": "https://orc.test/auth/sso"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            self.env["orc.client"].mint_sso_nonce(email="Admin@myco.odoo.com")
+
+        self.assertEqual(captured["json_body"]["odoo_login"], "Admin@myco.odoo.com")
 
     # -------------------------------------------------- mint_sso_nonce (lang)
 
@@ -263,7 +284,7 @@ class TestOrcClientTasksExt(TransactionCase):
         room_id = "!abc:host"
         url = self.env["orc.client"]._build_embed_return_to(room_id)
         self.assertEqual(
-            url, "/dashboard/tasks/%21abc%3Ahost?embed=1&theme=dark",
+            url, "/tasks/%21abc%3Ahost?embed=1&theme=dark",
         )
 
     def test_embed_return_to_appends_light_when_admin_sets_light(self):
