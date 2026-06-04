@@ -30,8 +30,10 @@ silently stopped reporting after the first new build. The current
 path:
 
 * **No secret in the addon** — the SHA is public the moment it's
-  pushed; ``repo`` is derived from ``git remote get-url origin`` and
-  is already visible to anyone with repo read access.
+  pushed; ``repo`` is derived from the customer project's git origin
+  (resolved up through any submodule layer — see
+  ``get_project_root``) and is already visible to anyone with repo
+  read access.
 * **No GitHub token anywhere** — Workplace has its own PAT for the
   SHA-on-repo cross-check on the receiving side.
 * **Survives DB resets** — ``WEBHOOK_BASE`` is a constant in this
@@ -106,11 +108,11 @@ def get_build_id(dbname):
     return None
 
 
-def get_commit_sha(addon_dir):
-    """Reads ``git rev-parse HEAD`` from the addon's own checkout."""
+def get_commit_sha(repo_dir):
+    """Reads ``git rev-parse HEAD`` from the given working tree."""
     try:
         return subprocess.check_output(
-            ["git", "-C", addon_dir, "rev-parse", "HEAD"],
+            ["git", "-C", repo_dir, "rev-parse", "HEAD"],
             stderr=subprocess.DEVNULL,
             timeout=5,
         ).decode().strip()
@@ -118,8 +120,8 @@ def get_commit_sha(addon_dir):
         return None
 
 
-def get_repo_from_git(addon_dir):
-    """Parse ``owner/repo`` from git's origin URL.
+def get_repo_from_git(repo_dir):
+    """Parse ``owner/repo`` from the working tree's origin URL.
 
     Supports both ``git@github.com:owner/repo.git`` and
     ``https://github.com/owner/repo[.git]``. Returns None on a
@@ -128,12 +130,65 @@ def get_repo_from_git(addon_dir):
     """
     try:
         url = subprocess.check_output(
-            ["git", "-C", addon_dir, "config", "--get", "remote.origin.url"],
+            ["git", "-C", repo_dir, "config", "--get", "remote.origin.url"],
             stderr=subprocess.DEVNULL,
             timeout=5,
         ).decode().strip()
         m = _GH_URL_RE.search(url)
         return f"{m.group(1)}/{m.group(2)}" if m else None
+    except Exception:
+        return None
+
+
+def get_project_root(start_dir):
+    """Resolve the *customer project* working-tree root from any path
+    inside it.
+
+    The build we must report is the customer's Odoo.sh project — its
+    repo and the commit it pushed. But the addon can physically live
+    in several places, and only some of them share the project's repo:
+
+    * committed straight into the customer repo (``addons/…`` or the
+      repo root) — ``start_dir`` already belongs to that repo;
+    * pulled in as a git submodule (``submodules/odoo-orc-client/…``)
+      — ``start_dir`` belongs to the *submodule*, whose origin/HEAD
+      are the addon's own (``opsway/odoo-orc-client`` at the pinned
+      sub-SHA), NOT the customer's;
+    * a submodule nested inside another submodule.
+
+    Reading ``git config remote.origin.url`` / ``rev-parse HEAD`` from
+    the addon dir is therefore correct only for the first layout; for
+    a submodule it reports the wrong repo and SHA, and Workplace
+    rejects the webhook (``no org configured for repo
+    opsway/odoo-orc-client``).
+
+    Walk up the superproject chain to the outermost working tree, then
+    normalise to its toplevel — giving the customer repo + commit in
+    every layout. Returns None when ``start_dir`` is not inside a git
+    repo at all (addon copied into a plain addons path); callers fall
+    back to ``start_dir`` and skip-on-no-repo as before.
+    """
+    cur = start_dir
+    try:
+        # `--show-superproject-working-tree` prints the parent project's
+        # path when `cur` is inside a submodule, and nothing otherwise.
+        # Loop to climb out of submodules nested in submodules.
+        while True:
+            sup = subprocess.check_output(
+                ["git", "-C", cur, "rev-parse",
+                 "--show-superproject-working-tree"],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            ).decode().strip()
+            if not sup:
+                break
+            cur = sup
+        top = subprocess.check_output(
+            ["git", "-C", cur, "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).decode().strip()
+        return top or None
     except Exception:
         return None
 
@@ -196,13 +251,24 @@ def _run_reporter(dbname):
             branch_slug = dbname.rsplit("-", 1)[0]
             build_url = f"https://{branch_slug}-{build_id}.dev.odoo.com"
 
-        # --- 2. Derive SHA and repo from the addon's own checkout --------
+        # --- 2. Derive SHA and repo from the customer project root -------
+        # NOT the addon's own dir: when the addon is vendored as a git
+        # submodule, that dir's origin/HEAD are opsway/odoo-orc-client at
+        # the pinned sub-SHA, so the report would carry the wrong repo
+        # and commit. get_project_root climbs out of any submodule layer
+        # to the outermost working tree (the customer repo Odoo.sh built).
         addon_dir = os.path.dirname(os.path.abspath(__file__))
-        sha = get_commit_sha(addon_dir)
+        project_root = get_project_root(addon_dir) or addon_dir
+        if project_root != addon_dir:
+            _logger.info(
+                "[orc_build_reporter] resolved project root %s "
+                "(addon at %s)", project_root, addon_dir,
+            )
+        sha = get_commit_sha(project_root)
         if not sha:
             _logger.warning("[orc_build_reporter] cannot derive sha")
             return
-        repo = get_repo_from_git(addon_dir)
+        repo = get_repo_from_git(project_root)
         if not repo:
             _logger.warning(
                 "[orc_build_reporter] cannot derive repo from origin URL "

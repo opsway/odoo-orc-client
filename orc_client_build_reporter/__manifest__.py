@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Build Reporter",
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "summary": (
         "Phones home to AI Workplace on every Odoo.sh registry init so the"
         " developer-flow agent can resolve `(commit sha → build_id, dev"
@@ -56,7 +56,8 @@ Quiet exits (one log line at most) when:
 
 1. Odoo is in test mode (``test_enable`` / ``test_file``).
 2. No build_id derivable from ``ODOO_BUILD_URL`` or ``cr.dbname``.
-3. Current commit SHA cannot be derived from the addon's checkout.
+3. Current commit SHA cannot be derived from the customer project
+   checkout (resolved up through any submodule layer).
 4. Neither in-source constants nor ICP overrides set.
 5. The git origin URL doesn't resolve to a GitHub ``owner/repo``
    shape (self-hosted GitLab and similar — AI Workplace only

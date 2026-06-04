@@ -12,6 +12,7 @@ from odoo.addons.orc_client_build_reporter.models.build_reporter import (
     _GH_URL_RE,
     get_build_id,
     get_commit_sha,
+    get_project_root,
     get_repo_from_git,
     get_stage,
     parse_dev_url,
@@ -140,6 +141,25 @@ def _make_repo(origin_url=None):
     return d
 
 
+def _add_submodule(super_dir, donor_dir, path):
+    """Add `donor_dir` as a submodule of `super_dir` at `path`.
+    `protocol.file.allow=always` re-enables file-protocol clones that
+    modern git blocks by default (CVE-2022-39253)."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+    subprocess.check_call(
+        ["git", "-c", "protocol.file.allow=always", "-C", super_dir,
+         "submodule", "add", donor_dir, path],
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    _git(["-C", super_dir, "commit", "-q", "-m", "add submodule"])
+
+
 class _TempReposMixin:
     def setUp(self):
         super().setUp()
@@ -159,6 +179,55 @@ class _TempReposMixin:
         d = tempfile.mkdtemp(prefix="orc_br_empty_")
         self._cleanup.append(d)
         return d
+
+    def _superproject_with_submodule(self, super_origin, sub_origin):
+        """Returns (super_dir, submodule_working_path). The checked-out
+        submodule's origin is reset to `sub_origin` so it mirrors prod
+        (origin = opsway/odoo-orc-client), independent of the local
+        donor path `submodule add` would otherwise record."""
+        super_dir = self._repo(super_origin)
+        donor = self._repo(sub_origin)
+        _add_submodule(super_dir, donor, "submodules/orc")
+        sub_path = os.path.join(super_dir, "submodules", "orc")
+        _git(["-C", sub_path, "remote", "set-url", "origin", sub_origin])
+        return super_dir, sub_path
+
+
+@tagged('post_install', '-at_install', 'orc_client_build_reporter')
+class TestGetProjectRoot(_TempReposMixin, BaseCase):
+    """`get_project_root` must resolve to the *customer* repo whether the
+    addon is committed in-repo or vendored as a submodule. The submodule
+    case is the bug that silently reported `repo=opsway/odoo-orc-client`
+    at the submodule's pinned SHA, so Workplace rejected the webhook."""
+
+    def test_in_repo_subdir_resolves_to_toplevel(self):
+        repo = self._repo("git@github.com:opsway/acme.git")
+        addon = os.path.join(repo, "addons", "orc_client_build_reporter")
+        os.makedirs(addon)
+        root = get_project_root(addon)
+        self.assertTrue(os.path.samefile(root, repo))
+        self.assertEqual(get_repo_from_git(root), "opsway/acme")
+
+    def test_submodule_resolves_to_superproject_not_submodule(self):
+        super_dir, sub_path = self._superproject_with_submodule(
+            super_origin="git@github.com:opsway/acme.git",
+            sub_origin="https://github.com/opsway/odoo-orc-client.git",
+        )
+        root = get_project_root(sub_path)
+        # Resolves up to the customer project, not the submodule.
+        self.assertTrue(os.path.samefile(root, super_dir))
+        self.assertEqual(get_repo_from_git(root), "opsway/acme")
+        # The pre-fix value (reading the submodule dir directly) is the
+        # wrong repo — proving the resolution actually changed something.
+        self.assertEqual(
+            get_repo_from_git(sub_path), "opsway/odoo-orc-client",
+        )
+        self.assertNotEqual(
+            get_commit_sha(root), get_commit_sha(sub_path),
+        )
+
+    def test_not_a_git_dir_returns_none(self):
+        self.assertIsNone(get_project_root(self._empty_dir()))
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')

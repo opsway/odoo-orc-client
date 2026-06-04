@@ -27,6 +27,14 @@ commit.
   config.get("test_file")` short-circuits at the top of
   `_run_reporter`. Otherwise running the test suite would post real
   webhook calls.
+- **Report the customer repo, not the addon's.** `repo` and `sha`
+  come from `get_project_root(addon_dir)`, which climbs out of any
+  submodule layer to the outermost working tree. The addon may be
+  committed straight into the customer repo *or* pulled in as a
+  submodule (`submodules/odoo-orc-client/…`); reading the addon dir's
+  own origin/HEAD works only for the former — for a submodule it
+  reports `opsway/odoo-orc-client` at the pinned sub-SHA and Workplace
+  rejects the webhook. `TestGetProjectRoot` pins both layouts.
 
 ## Debounce key shape
 
@@ -84,6 +92,8 @@ merely existing.
 ## Compatibility / non-goals
 
 - One repo per Odoo.sh project (1:1). Multi-repo not supported.
+- The addon may live in the customer repo *or* as a submodule of it;
+  both report the customer repo (see `get_project_root`).
 - No retries — if the POST fails, the next restart re-attempts. The
   `last_report_key` debounce ensures one post per
   `{sha}:{build_id}:{stage}`.
