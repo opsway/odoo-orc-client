@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from odoo.exceptions import UserError
+from odoo.exceptions import MissingError, UserError
 from odoo.tests import TransactionCase
 
 
@@ -149,6 +149,43 @@ class TestOrcProvisioning(TransactionCase):
         # being present (write-hook keys off `orc_api_key_id`, not
         # `orc_user_id`, to catch re-enrolment).
         self.assertEqual(len(provision_calls), 1)
+
+    def test_orphan_cleanup_clears_dangling_apikey_pointer(self):
+        """A managed key hard-deleted out-of-band leaves orc_api_key_id
+        dangling, which breaks every read of the user form.
+
+        Odoo core GCs expired api keys with a raw-SQL DELETE
+        (`_gc_user_apikeys`). Because `res.users.apikeys` is `_auto=False`
+        there is no real DB FK, so the field's `ondelete="set null"`
+        (enforced only by the ORM unlink) never fires and the pointer is
+        left referencing a row that no longer exists. Reading the linked
+        key — as the user form does to render the Many2one — then raises
+        MissingError. The nightly orphan-cleanup cron must heal it.
+        """
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        key_id = self.user.orc_api_key_id.id
+        self.assertTrue(key_id)
+
+        # Simulate core's raw-SQL GC of the expired key: bypasses the
+        # ORM unlink, so ondelete="set null" never runs.
+        self.env.cr.execute(
+            "DELETE FROM res_users_apikeys WHERE id = %s", (key_id,)
+        )
+        self.env.invalidate_all()
+
+        # Repro: the dangling pointer makes the user form unrenderable.
+        with self.assertRaises(MissingError):
+            self.user.orc_api_key_id.display_name
+
+        # Nightly cleanup clears the dangling pointer.
+        self.env["res.users"]._cron_orc_orphan_cleanup()
+
+        self.user.invalidate_recordset()
+        self.assertFalse(self.user.orc_api_key_id)
+        # The user form now reads end-to-end (no MissingError).
+        self.user.web_read({"orc_api_key_id": {"fields": {"display_name": {}}}})
 
     # -- bare-login tests -------------------------------------------------------
 

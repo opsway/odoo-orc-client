@@ -587,7 +587,41 @@ class ResUsers(models.Model):
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
-        """Revoke AI Workplace-tagged api keys not referenced by any res.users."""
+        """Two-direction orphan cleanup for the managed-key relation.
+
+        Forward (user → key): clear ``orc_api_key_id`` pointers that
+        reference a ``res.users.apikeys`` row which no longer exists.
+        This can't be left to the field's ``ondelete="set null"``:
+        ``res.users.apikeys`` is ``_auto=False`` so Odoo never creates
+        a real DB FK for the Many2one, and Odoo core garbage-collects
+        expired keys with a raw-SQL ``DELETE`` (``_gc_user_apikeys``)
+        that bypasses the ORM unlink the ``set null`` rule rides on.
+        A stale pointer makes every read of the user (e.g. opening the
+        user form) raise ``MissingError``, so heal it nightly.
+
+        Reverse (key → user): revoke AI Workplace-tagged api keys not
+        referenced by any res.users.
+        """
+        # Forward direction — raw SQL, since the dangling rows are
+        # invisible to the ORM (the referenced key is already gone).
+        self.env.cr.execute(
+            """
+            UPDATE res_users u SET orc_api_key_id = NULL
+            WHERE orc_api_key_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM res_users_apikeys k WHERE k.id = u.orc_api_key_id
+              )
+            """
+        )
+        if self.env.cr.rowcount:
+            _logger.info(
+                "[orc] cleared %s dangling orc_api_key_id pointer(s)",
+                self.env.cr.rowcount,
+            )
+        # Drop any cached stale Many2one values read before the UPDATE.
+        self.env.invalidate_all()
+
+        # Reverse direction — key rows no user points at.
         keys = self.env["res.users.apikeys"].sudo().search([("name", "=", ORC_KEY_NAME)])
         referenced_ids = set(self.search([("orc_api_key_id", "!=", False)]).mapped("orc_api_key_id.id"))
         for k in keys:
