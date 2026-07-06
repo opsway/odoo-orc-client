@@ -120,23 +120,40 @@ class ResUsers(models.Model):
         return "member"
 
     def _orc_generate_api_key(self):
-        """Generate a new Odoo API key for this user, tagged as AI Workplace-managed."""
+        """Generate a new Odoo API key for this user, tagged as AI Workplace-managed.
+
+        The key is created **and committed in its own cursor** before we
+        return it. This is load-bearing: the caller immediately pushes the raw
+        key to AI Workplace, whose ``POST /api/auth/setup-key`` validates it by
+        connecting BACK into Odoo over XML-RPC on a *separate* connection
+        (ORC #304). That probe runs READ COMMITTED, so it only sees the key if
+        it is already committed — a key created in the still-open save/cron
+        transaction is invisible to the probe and gets rejected ("wrong key or
+        login"), which then rolls the whole save back. Committing here makes
+        the row durable + visible to the probe regardless of the enclosing
+        transaction; on a failed push the caller revokes it durably (see
+        ``_orc_revoke_key(..., commit=True)``), with the orphan-cleanup cron as
+        the backstop.
+        """
         self.ensure_one()
         try:
-            raw_key = (
-                self.env["res.users.apikeys"]
-                .with_user(self)
-                .sudo()
-                ._generate(None, ORC_KEY_NAME)
-            )
+            # Own cursor → commits on clean exit, so the row is visible to AI
+            # Workplace's cross-connection probe before the caller pushes it.
+            with self.env.registry.cursor() as key_cr:
+                key_env = api.Environment(key_cr, self.env.uid, self.env.context)
+                raw_key = (
+                    key_env["res.users.apikeys"]
+                    .with_user(self.id)
+                    .sudo()
+                    ._generate(None, ORC_KEY_NAME)
+                )
         except Exception as exc:
             _logger.exception("[orc] _generate failed for %s", self.login)
             raise UserError(_(
                 "Failed to generate Odoo API key for %(login)s: %(err)s"
             ) % {"login": self.login, "err": exc}) from exc
 
-        # `_generate()` returns the raw key and persists a row; find
-        # the freshly created row by name+user and pin our reference.
+        # Row is committed; the current cursor (READ COMMITTED) now sees it.
         key_row = self.env["res.users.apikeys"].sudo().search(
             [("user_id", "=", self.id), ("name", "=", ORC_KEY_NAME)],
             order="create_date DESC",
@@ -144,12 +161,28 @@ class ResUsers(models.Model):
         )
         return raw_key, key_row
 
-    def _orc_revoke_key(self, key_record):
-        if key_record and key_record.exists():
+    def _orc_revoke_key(self, key_record, commit=False):
+        if not (key_record and key_record.exists()):
+            return
+        if commit:
+            # The new key is committed in its own cursor (so the probe can see
+            # it), so unlinking it in the caller's transaction won't stick when
+            # that transaction rolls back — exactly the failed-push path.
+            # Revoke it in its own cursor so it sticks regardless.
+            key_id = key_record.id
             try:
-                key_record.sudo().unlink()
+                with self.env.registry.cursor() as rev_cr:
+                    rev_env = api.Environment(rev_cr, self.env.uid, self.env.context)
+                    row = rev_env["res.users.apikeys"].sudo().browse(key_id)
+                    if row.exists():
+                        row.unlink()
             except Exception as exc:
-                _logger.warning("[orc] failed to revoke key %s: %s", key_record.id, exc)
+                _logger.warning("[orc] failed to revoke committed key %s: %s", key_id, exc)
+            return
+        try:
+            key_record.sudo().unlink()
+        except Exception as exc:
+            _logger.warning("[orc] failed to revoke key %s: %s", key_record.id, exc)
 
     def _orc_stamp_sync(self, status, message=""):
         """Stamp the last-sync triple on this recordset. Always called
@@ -172,8 +205,10 @@ class ResUsers(models.Model):
           3. Push NEW key to AI Workplace (upsert semantics in user_odoo_keys).
           4. Revoke OLD key only AFTER (2) + (3) succeeded.
 
-        Any exception between (1) and (3) rolls back the Odoo TX; the
-        just-created key is garbage-collected by the orphan-cleanup cron.
+        The new key is committed in its own cursor (see
+        ``_orc_generate_api_key``) so AI Workplace's setup-key probe can see
+        it; on any exception between (1) and (3) we revoke it durably
+        (``commit=True``), with the orphan-cleanup cron as the backstop.
         """
         for user in self:
             if not user.active:
@@ -212,8 +247,10 @@ class ResUsers(models.Model):
                     odoo_login=user.login,
                 )
             except Exception:
-                # Rollback the just-created key so we don't leak it.
-                user._orc_revoke_key(new_key_row)
+                # The new key was committed in its own cursor (so AI Workplace
+                # could probe it), so it survives this transaction's rollback —
+                # revoke it durably rather than leaking a live key.
+                user._orc_revoke_key(new_key_row, commit=True)
                 raise
 
             # 4. Revoke old key (if any). Best-effort — its presence
