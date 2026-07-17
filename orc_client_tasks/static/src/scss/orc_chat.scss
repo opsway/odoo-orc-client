@@ -10,6 +10,7 @@
 $orc-chat-window-width: 75vw;
 $orc-chat-window-height: 75vh;
 $orc-chat-header-height: 38px;
+$orc-chat-folded-width: 260px;
 $orc-chat-window-gap: 10px;
 $orc-chat-header-bg: #66B57D;
 
@@ -114,34 +115,50 @@ $orc-chat-header-bg: #66B57D;
 
 /* ------------------------------------------------------------------ dock + window */
 
+/* Discuss-style dock: anchored to the bottom-right, windows side by
+ * side, newest on the right, folded ones collapsing into compact
+ * header bars on the same bottom line. The dock spans the whole
+ * bottom edge (left+right pinned) so that when 2–3 windows are
+ * unfolded at once flexbox shrinks them to fit instead of pushing
+ * them off-screen past the left edge. */
 .o_orc_chat_dock {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    left: $orc-chat-window-gap;
+    right: $orc-chat-window-gap;
+    bottom: 0;
     z-index: 1040;
     display: flex;
     flex-direction: row;
-    align-items: center;
+    justify-content: flex-end;
+    align-items: flex-end; /* folded bars sit on the bottom line, not stretched */
     gap: $orc-chat-window-gap;
     pointer-events: none; /* children re-enable */
 }
 
 .o_orc_chat_window {
     pointer-events: auto;
-    width: $orc-chat-window-width;
+    /* flex-basis (not a hard width) so several unfolded windows share
+     * the dock's span instead of overflowing the viewport. */
+    flex: 0 1 $orc-chat-window-width;
+    min-width: 0;
+    max-width: 100%; /* a no-shrink folded bar must not spill past a narrow viewport */
     height: $orc-chat-window-height;
     display: flex;
     flex-direction: column;
     background: var(--bs-body-bg, #fff);
     color: var(--bs-body-color, #111);
     border: 1px solid var(--bs-border-color, #e5e7eb);
-    border-radius: 8px;
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0; /* docked: square against the bottom edge */
     box-shadow: 0 12px 28px rgba(0, 0, 0, .18);
     overflow: hidden;
-    transition: height .12s ease;
+    transition: height .12s ease, flex-basis .12s ease;
 
     &.o_orc_chat_window_folded {
+        /* Collapse into a compact Discuss-style header bar; the fixed
+         * basis + no-shrink keeps the bar readable next to an unfolded
+         * 75vw sibling. */
+        flex: 0 0 $orc-chat-folded-width;
         height: $orc-chat-header-height;
         .o_orc_chat_window_body { display: none; }
     }
@@ -162,9 +179,13 @@ $orc-chat-header-bg: #66B57D;
             display: flex;
             align-items: center;
             gap: 6px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            min-width: 0;
+
+            .o_orc_chat_window_title_text {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
         }
 
         .o_orc_chat_window_actions {
