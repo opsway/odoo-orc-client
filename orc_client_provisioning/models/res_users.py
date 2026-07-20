@@ -198,6 +198,10 @@ class ResUsers(models.Model):
         transaction; on a failed push the caller revokes it durably (see
         ``_orc_revoke_key(..., commit=True)``), with the orphan-cleanup cron as
         the backstop.
+
+        Returns ``(raw_key, new_key_id)`` — the id is captured inside the
+        generating cursor and returned as a plain int, because the caller's
+        REPEATABLE READ snapshot cannot see the just-committed row.
         """
         self.ensure_one()
         icp = self.env["ir.config_parameter"].sudo()
@@ -214,29 +218,54 @@ class ResUsers(models.Model):
                     .sudo()
                     ._generate(scope=None, name=ORC_KEY_NAME, expiration_date=expiration)
                 )
+                # Capture the id HERE, inside the generating cursor, where the
+                # row is unambiguously visible. Re-searching from the *outer*
+                # transaction (as this used to) silently returns EMPTY: Odoo
+                # runs cursors at REPEATABLE READ, so the caller's snapshot —
+                # opened before this nested cursor committed — cannot see the
+                # new row. That empty result made the caller store
+                # `orc_api_key_id = False`; the nightly orphan-cleanup cron then
+                # reaped the now-unreferenced key out from under AI Workplace,
+                # breaking the user's Odoo access on every rotation while the
+                # gateway kept the (now dead) key.
+                new_key_id = (
+                    key_env["res.users.apikeys"]
+                    .sudo()
+                    .search(
+                        [("user_id", "=", self.id), ("name", "=", ORC_KEY_NAME)],
+                        order="create_date DESC",
+                        limit=1,
+                    )
+                    .id
+                )
         except Exception as exc:
             _logger.exception("[orc] _generate failed for %s", self.login)
             raise UserError(_(
                 "Failed to generate Odoo API key for %(login)s: %(err)s"
             ) % {"login": self.login, "err": exc}) from exc
 
-        # Row is committed; the current cursor (READ COMMITTED) now sees it.
-        key_row = self.env["res.users.apikeys"].sudo().search(
-            [("user_id", "=", self.id), ("name", "=", ORC_KEY_NAME)],
-            order="create_date DESC",
-            limit=1,
-        )
-        return raw_key, key_row
+        # Return the id (not a recordset): the row is committed but invisible to
+        # the caller's snapshot, so a recordset read here would be empty. The id
+        # is a plain int the caller stores directly into orc_api_key_id
+        # (res.users.apikeys is _auto=False → no FK existence check on write).
+        return raw_key, new_key_id
 
-    def _orc_revoke_key(self, key_record, commit=False):
-        if not (key_record and key_record.exists()):
+    def _orc_revoke_key(self, key_ref, commit=False):
+        """Revoke an Odoo API key. ``key_ref`` is either a
+        ``res.users.apikeys`` recordset (the OLD key, visible in the caller's
+        transaction) or a bare int id (the freshly generated key, committed in
+        its own cursor and therefore NOT visible under the caller's REPEATABLE
+        READ snapshot — so we must NOT gate on a caller-side ``.exists()``).
+        """
+        key_id = key_ref if isinstance(key_ref, int) else (key_ref.id if key_ref else False)
+        if not key_id:
             return
         if commit:
             # The new key is committed in its own cursor (so the probe can see
             # it), so unlinking it in the caller's transaction won't stick when
             # that transaction rolls back — exactly the failed-push path.
-            # Revoke it in its own cursor so it sticks regardless.
-            key_id = key_record.id
+            # Revoke it in its own cursor so it sticks regardless, and so the
+            # fresh transaction can actually SEE the committed row.
             try:
                 with self.env.registry.cursor() as rev_cr:
                     rev_env = api.Environment(rev_cr, self.env.uid, self.env.context)
@@ -247,9 +276,11 @@ class ResUsers(models.Model):
                 _logger.warning("[orc] failed to revoke committed key %s: %s", key_id, exc)
             return
         try:
-            key_record.sudo().unlink()
+            row = self.env["res.users.apikeys"].sudo().browse(key_id)
+            if row.exists():
+                row.unlink()
         except Exception as exc:
-            _logger.warning("[orc] failed to revoke key %s: %s", key_record.id, exc)
+            _logger.warning("[orc] failed to revoke key %s: %s", key_id, exc)
 
     def _orc_stamp_sync(self, status, message=""):
         """Stamp the last-sync triple on this recordset. Always called
@@ -282,8 +313,10 @@ class ResUsers(models.Model):
                 continue
             client = self.env["orc.client"]
 
-            # 1. New key first (old still valid).
-            new_raw_key, new_key_row = user._orc_generate_api_key()
+            # 1. New key first (old still valid). `_orc_generate_api_key`
+            # returns the new key's id (int) — captured inside the generating
+            # cursor, because the outer snapshot can't see the committed row.
+            new_raw_key, new_key_id = user._orc_generate_api_key()
             old_key_row = user.orc_api_key_id
 
             try:
@@ -328,18 +361,18 @@ class ResUsers(models.Model):
                 # The new key was committed in its own cursor (so AI Workplace
                 # could probe it), so it survives this transaction's rollback —
                 # revoke it durably rather than leaking a live key.
-                user._orc_revoke_key(new_key_row, commit=True)
+                user._orc_revoke_key(new_key_id, commit=True)
                 raise
 
             # 4. Revoke old key (if any). Best-effort — its presence
             #    won't leak access now that AI Workplace has the new one, but we
             #    remove it to cap blast radius.
-            if old_key_row and old_key_row.id != new_key_row.id:
+            if old_key_row and old_key_row.id != new_key_id:
                 user._orc_revoke_key(old_key_row)
 
             now = fields.Datetime.now()
             user.sudo().write({
-                "orc_api_key_id": new_key_row.id,
+                "orc_api_key_id": new_key_id,
                 "orc_provisioned_at": user.orc_provisioned_at or now,
                 "orc_last_rotation_at": now,
                 "orc_gateway_email": eff_email,
@@ -555,7 +588,33 @@ class ResUsers(models.Model):
                 # calls (revoke, SSO, tasks) use the stable stored value.
                 if not user.orc_gateway_email:
                     user.sudo().write({"orc_gateway_email": email})
-                user._orc_stamp_sync("ok", "in sync")
+                # Validity guard: AI Workplace holding a key ROW is NOT proof
+                # the key works. If our local ownership pointer is lost
+                # (orc_api_key_id empty, or dangling to a GC'd row), the key AI
+                # Workplace stores is one Odoo no longer has — every tool call
+                # fails to authenticate. Re-provision to restore a matching
+                # pair rather than stamping "in sync" over a dead key. (Cheap:
+                # a local field read, no extra network. Self-heals users left
+                # broken by the rotation-pointer bug.)
+                owned = user.orc_api_key_id
+                if owned and owned.exists():
+                    user._orc_stamp_sync("ok", "in sync")
+                    continue
+                try:
+                    user.action_orc_provision()
+                    user._orc_stamp_sync("ok", "healed: local key missing, re-provisioned")
+                except Exception as exc:
+                    _logger.warning(
+                        "[orc] reconcile heal (lost local key) failed for %s: %s",
+                        user.login, exc,
+                    )
+                    user._orc_stamp_sync("error", f"heal failed: {exc}")
+                    self.env["orc.audit.log"].sudo().create({
+                        "user_id": user.id,
+                        "action": "reconcile",
+                        "status": "error",
+                        "error": str(exc)[:1000],
+                    })
                 continue
             try:
                 user.action_orc_provision()
@@ -659,7 +718,18 @@ class ResUsers(models.Model):
         self.env.invalidate_all()
 
         # Reverse direction — key rows no user points at.
-        keys = self.env["res.users.apikeys"].sudo().search([("name", "=", ORC_KEY_NAME)])
+        #
+        # Grace window: never reap a key younger than an hour. With the
+        # ownership pointer now set atomically at generation, a fresh
+        # unreferenced managed key shouldn't occur — but this stops the reaper
+        # from ever deleting a key while a provision is briefly in flight (the
+        # failure mode that silently broke rotations). Older unreferenced keys
+        # are genuine orphans and still get cleaned up.
+        grace_cutoff = fields.Datetime.subtract(fields.Datetime.now(), hours=1)
+        keys = self.env["res.users.apikeys"].sudo().search([
+            ("name", "=", ORC_KEY_NAME),
+            ("create_date", "<", grace_cutoff),
+        ])
         referenced_ids = set(self.search([("orc_api_key_id", "!=", False)]).mapped("orc_api_key_id.id"))
         for k in keys:
             if k.id not in referenced_ids:
