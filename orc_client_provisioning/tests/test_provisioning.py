@@ -29,13 +29,18 @@ class TestOrcProvisioning(TransactionCase):
             "provision_user": lambda **kw: "orc-uid-1",
             "push_odoo_key": lambda **kw: None,
             "revoke_infra_access": lambda **kw: None,
+            # Default: the gateway knows about nobody. Reconcile tests override
+            # this to place a user in the remote directory.
+            "list_users": lambda **kw: {"users": []},
         }
         defaults.update(overrides)
-        return patch.multiple(client, **{k: lambda *a, **kw: v for k, v in defaults.items()
-                                          if not callable(v)},
-                              provision_user=defaults["provision_user"],
-                              push_odoo_key=defaults["push_odoo_key"],
-                              revoke_infra_access=defaults["revoke_infra_access"])
+        return patch.multiple(
+            client,
+            provision_user=defaults["provision_user"],
+            push_odoo_key=defaults["push_odoo_key"],
+            revoke_infra_access=defaults["revoke_infra_access"],
+            list_users=defaults["list_users"],
+        )
 
     def test_provision_creates_key_and_records_audit(self):
         with self._patch_client():
@@ -186,6 +191,106 @@ class TestOrcProvisioning(TransactionCase):
         self.assertFalse(self.user.orc_api_key_id)
         # The user form now reads end-to-end (no MissingError).
         self.user.web_read({"orc_api_key_id": {"fields": {"display_name": {}}}})
+
+    # -- rotation key-pointer / reconcile-validity regression -------------------
+
+    def test_reconcile_reprovisions_when_local_key_pointer_lost(self):
+        """Regression for the rotation data-loss bug.
+
+        A rotation once left `orc_api_key_id` empty (the outer-transaction
+        re-read couldn't see the key committed in the nested cursor) while the
+        gateway still held the pushed key. The orphan reaper then deleted the
+        Odoo key, so the gateway's key could no longer authenticate — yet
+        reconcile kept stamping "in sync" because the gateway still listed a
+        key ROW for the user.
+
+        Reconcile must now treat "remote key present BUT local pointer lost" as
+        drift and re-provision, restoring a matching Odoo↔gateway pair.
+        """
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        email = self.user._orc_gateway_identity()
+
+        # Simulate the drift: gateway still lists the user, local pointer gone.
+        self.user.sudo().write({"orc_api_key_id": False})
+
+        provision_calls: list[dict] = []
+
+        def capture_provision(**kw):
+            provision_calls.append(kw)
+            return self.user.orc_user_id or "orc-uid-1"
+
+        with self._patch_client(
+            provision_user=capture_provision,
+            list_users=lambda **kw: {"users": [{"email": email}]},
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.user.invalidate_recordset()
+        self.assertEqual(len(provision_calls), 1,
+                         "lost pointer must trigger re-provision, not 'in sync'")
+        self.assertTrue(self.user.orc_api_key_id, "ownership pointer restored")
+        self.assertIn("healed", (self.user.orc_last_sync_message or "").lower())
+
+    def test_reconcile_stays_in_sync_when_pointer_is_valid(self):
+        """The validity guard must NOT re-provision a healthy user — a present,
+        existing local key + a remote key row is genuinely 'in sync'."""
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        email = self.user._orc_gateway_identity()
+
+        provision_calls: list[dict] = []
+
+        def capture_provision(**kw):
+            provision_calls.append(kw)
+            return "orc-uid-1"
+
+        with self._patch_client(
+            provision_user=capture_provision,
+            list_users=lambda **kw: {"users": [{"email": email}]},
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.user.invalidate_recordset()
+        self.assertEqual(provision_calls, [],
+                         "valid pointer → in sync, must not re-provision")
+        self.assertEqual(self.user.orc_last_sync_message, "in sync")
+
+    def test_orphan_reaper_respects_grace_window(self):
+        """A freshly-created managed key must survive the orphan reaper even if
+        momentarily unreferenced — that race is what silently deleted rotated
+        keys. Only keys older than the grace window are genuine orphans."""
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        key_id = self.user.orc_api_key_id.id
+        self.assertTrue(key_id)
+
+        # Make it unreferenced (the lost-pointer state).
+        self.user.sudo().write({"orc_api_key_id": False})
+
+        # Fresh (create_date = now) → protected by the grace window.
+        self.env["res.users"]._cron_orc_orphan_cleanup()
+        self.assertTrue(
+            self.env["res.users.apikeys"].browse(key_id).exists(),
+            "a fresh unreferenced managed key must NOT be reaped",
+        )
+
+        # Age it past the grace window → genuine orphan → reaped.
+        self.env.cr.execute(
+            "UPDATE res_users_apikeys "
+            "SET create_date = (now() at time zone 'UTC') - interval '2 hours' "
+            "WHERE id = %s",
+            (key_id,),
+        )
+        self.env.invalidate_all()
+        self.env["res.users"]._cron_orc_orphan_cleanup()
+        self.assertFalse(
+            self.env["res.users.apikeys"].browse(key_id).exists(),
+            "an aged unreferenced managed key must be reaped",
+        )
 
     # -- bare-login tests -------------------------------------------------------
 
