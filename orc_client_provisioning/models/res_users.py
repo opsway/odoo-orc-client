@@ -62,9 +62,13 @@ class ResUsers(models.Model):
         copy=False,
     )
     orc_last_sync_status = fields.Selection(
+        # No "drift" state: every drift the reconcile detects is remediated in
+        # the same pass (Direction A re-provisions, Direction B revokes) and
+        # then stamped ok/error, so it was never reachable — the value and its
+        # badge decoration only ever suggested a state the code cannot produce.
+        # Drift IS recorded, on `orc.audit.log.status`.
         selection=[
             ("ok", "OK"),
-            ("drift", "Drift"),
             ("error", "Error"),
         ],
         string="Last sync status",
@@ -448,6 +452,7 @@ class ResUsers(models.Model):
         # in-flight write (and the cascade below, which reads
         # `flip_to` off it) sees the corrected shape.  The caller's own
         # dict is left alone.
+        forced_off = False
         if "login" in vals:
             for user in self:
                 if user.login == vals["login"]:
@@ -462,6 +467,7 @@ class ResUsers(models.Model):
                 # and orphan the first.
                 if vals.get("orc_enabled", user.orc_enabled):
                     vals = {**vals, "orc_enabled": False}
+                    forced_off = True
                     break
 
         if (
@@ -488,8 +494,33 @@ class ResUsers(models.Model):
                 user.action_orc_provision()
                 user._orc_stamp_sync("ok", "provisioned on save")
             elif not flip_to and user.orc_user_id:
-                user.action_orc_deprovision()
-                user._orc_stamp_sync("ok", "deprovisioned on save")
+                if not forced_off:
+                    user.action_orc_deprovision()
+                    user._orc_stamp_sync("ok", "deprovisioned on save")
+                    continue
+                # `orc_enabled: False` was injected by the login guard above,
+                # not asked for by the caller: this is a RENAME, and
+                # `action_orc_deprovision` makes a synchronous
+                # `revoke_infra_access` call.  Letting that raise would abort
+                # the rename over an unrelated AI Workplace outage — and leave
+                # the user enrolled anyway, so the admin gets neither the
+                # rename nor the revoke.  Swallow it instead: `orc_enabled` is
+                # already False locally, and reconcile's Direction B (local
+                # disabled + `orc_user_id` set → revoke) retries the remote
+                # side on the next hourly tick.  Revocation is therefore
+                # eventually-consistent on this path, which is strictly better
+                # than the rename failing outright.
+                try:
+                    user.action_orc_deprovision()
+                    user._orc_stamp_sync("ok", "deprovisioned on save")
+                except Exception as exc:
+                    _logger.warning(
+                        "[orc] deprovision on login change failed for %s: %s",
+                        user.login, exc,
+                    )
+                    user._orc_stamp_sync(
+                        "error", f"login changed; deprovision failed: {exc}",
+                    )
         return res
 
     # --- Crons -----------------------------------------------------------------
@@ -647,7 +678,14 @@ class ResUsers(models.Model):
         # `orc_enabled=True` row.
         residual_remote = set(remote_users) - set(local_by_email)
         if residual_remote:
-            self._reconcile_revoke_residual(client, residual_remote)
+            try:
+                self._reconcile_revoke_residual(client, residual_remote)
+            except Exception:
+                # Direction A's per-user stamps are already written in this
+                # transaction. A Direction-B blow-up must not roll them back —
+                # that turned a single bad remote entry into a total no-op for
+                # the whole tick, invisibly.
+                _logger.exception("[orc] reconcile residual pass failed")
 
     @api.model
     def _reconcile_revoke_residual(self, client, residual_remote):
@@ -667,16 +705,22 @@ class ResUsers(models.Model):
         disabled_by_email = {
             u._orc_gateway_identity(): u for u in local_disabled_provisioned
         }
+        # Per-email isolation, matching Direction A's per-user try/except: one
+        # bad remote entry must not abort the rest of the pass. Only the revoke
+        # used to be guarded, so anything raised outside it (e.g. the orphan
+        # audit row) escaped all the way out of `_cron_orc_reconcile` and rolled
+        # the whole tick back — remaining residual users never revoked, every
+        # stamp from the pass discarded.
         for email in residual_remote:
             user = disabled_by_email.get(email)
-            if user is None:
-                self.env["orc.audit.log"].sudo().create({
-                    "action": "orphan_remote_user",
-                    "status": "drift",
-                    "error": f"no local res.users for {email}"[:1000],
-                })
-                continue
             try:
+                if user is None:
+                    self.env["orc.audit.log"].sudo().create({
+                        "action": "orphan_remote_user",
+                        "status": "drift",
+                        "error": f"no local res.users for {email}"[:1000],
+                    })
+                    continue
                 client.revoke_infra_access(email=email)
                 user._orc_stamp_sync("ok", "deprovisioned from AI Workplace")
             except Exception as exc:
@@ -684,13 +728,18 @@ class ResUsers(models.Model):
                     "[orc] reconcile deprovision failed for %s: %s",
                     email, exc,
                 )
-                user._orc_stamp_sync("error", f"deprovision failed: {exc}")
-                self.env["orc.audit.log"].sudo().create({
-                    "user_id": user.id,
-                    "action": "reconcile",
-                    "status": "error",
-                    "error": str(exc)[:1000],
-                })
+                if user is not None:
+                    user._orc_stamp_sync("error", f"deprovision failed: {exc}")
+                try:
+                    self.env["orc.audit.log"].sudo().create({
+                        "user_id": user.id if user is not None else False,
+                        "action": "reconcile",
+                        "status": "error",
+                        "error": str(exc)[:1000],
+                    })
+                except Exception:
+                    # Never let the failure bookkeeping itself break the loop.
+                    _logger.exception("[orc] could not record reconcile failure")
 
     @api.model
     def _cron_orc_orphan_cleanup(self):
