@@ -20,6 +20,19 @@ _logger = logging.getLogger(__name__)
 
 
 def migrate(cr, version):
+    # 18.0.1.17.0 replaces this Many2one with the Integer `orc_api_key_ref`
+    # and drops the column. Post scripts run in version order so this one
+    # still sees it on any upgrade path, but guard anyway rather than break
+    # an upgrade over a column that no longer needs healing.
+    cr.execute(
+        """
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'res_users' AND column_name = 'orc_api_key_id'
+        """
+    )
+    if not cr.fetchone():
+        return
+
     cr.execute(
         """
         UPDATE res_users u SET orc_api_key_id = NULL
