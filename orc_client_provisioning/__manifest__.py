@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Provisioning",
-    "version": "18.0.1.17.0",
+    "version": "18.0.1.18.0",
     "summary": "Provision Odoo users into the AI Workplace with auto-rotated API keys and single-click SSO.",
     "description": """
 AI Workplace — Provisioning
@@ -42,4 +42,9 @@ Configuration is via ``ir.config_parameter`` keys. See the repo README.
     },
     "installable": True,
     "application": False,
+    # Starts the load watchdog (see load_watchdog.py). post_load is the only
+    # hook that runs early enough — before any _register_hook — to catch a
+    # module load that wedges, and it needs no database, so it also survives a
+    # neutralized staging restore.
+    "post_load": "post_load",
 }
