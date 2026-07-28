@@ -9,15 +9,16 @@ form view reflects the cron's last verdict.
 Tests mock the ORC HTTP client so they can hand-craft remote
 payloads + force errors without hitting the network.
 """
-from unittest.mock import patch
-
 from odoo.exceptions import UserError
 from odoo.tests import TransactionCase
+
+from .common import patch_orc_client, share_test_cursor
 
 
 class TestReconcileDrift(TransactionCase):
     def setUp(self):
         super().setUp()
+        share_test_cursor(self)
         icp = self.env["ir.config_parameter"].sudo()
         icp.set_param("orc.endpoint_url", "https://orc.test")
         icp.set_param("orc.org_token", "orc_test_token")
@@ -27,8 +28,8 @@ class TestReconcileDrift(TransactionCase):
             "name": "Alice Example",
             "login": "alice@acme.test",
         })
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             provision_user=lambda *a, **kw: "orc-uid-1",
             push_odoo_key=lambda *a, **kw: None,
         ):
@@ -37,8 +38,8 @@ class TestReconcileDrift(TransactionCase):
     def test_remote_only_with_no_local_user_logs_orphan(self):
         """ORC has a user with no matching res.users — orphan, log
         as drift; can't auto-create local users from the remote list."""
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [
                     {"email": self.user.login, "role": "user"},
@@ -56,8 +57,8 @@ class TestReconcileDrift(TransactionCase):
         self.assertIn("ghost@acme.test", log.error)
 
     def test_no_drift_no_log(self):
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [{"email": self.user.login, "role": "user"}],
                 "infrastructures": [],
@@ -84,8 +85,8 @@ class TestReconcileDrift(TransactionCase):
             calls["provision"] += 1
             return "orc-uid-1"
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {"users": [], "infrastructures": []},
             provision_user=fake_provision,
             push_odoo_key=lambda **kw: None,
@@ -102,8 +103,8 @@ class TestReconcileDrift(TransactionCase):
         """Direction B — local user exists with orc_enabled=False
         but remote still lists them. Cron must call revoke and stamp ok."""
         # Flip the user off — but pretend remote still has them (drift).
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             revoke_infra_access=lambda **kw: None,
         ):
             self.user.orc_enabled = False
@@ -113,8 +114,8 @@ class TestReconcileDrift(TransactionCase):
         def fake_revoke(**kw):
             calls["revoke_email"] = kw.get("email")
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [{"email": self.user.login, "role": "user"}],
                 "infrastructures": [],
@@ -134,8 +135,8 @@ class TestReconcileDrift(TransactionCase):
         response, so reconcile does not call revoke again on every
         cron tick (the org-scoped pre-1.9.0 endpoint kept returning
         them by org membership and produced revoke churn)."""
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             revoke_infra_access=lambda **kw: None,
         ):
             self.user.orc_enabled = False
@@ -145,8 +146,8 @@ class TestReconcileDrift(TransactionCase):
         def fake_revoke(**kw):
             calls["revoke_count"] += 1
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {"users": []},
             revoke_infra_access=fake_revoke,
         ):
@@ -168,8 +169,8 @@ class TestReconcileDrift(TransactionCase):
             calls["provision"] += 1
             return "orc-uid-1"
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {"users": []},
             provision_user=fake_provision,
             push_odoo_key=lambda **kw: None,
@@ -187,7 +188,7 @@ class TestReconcileDrift(TransactionCase):
         def fail(*a, **kw):
             raise UserError("upstream 500")
 
-        with patch.multiple(self.env["orc.client"], list_users=fail):
+        with patch_orc_client(self.env, list_users=fail):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.user.invalidate_recordset()
@@ -220,8 +221,8 @@ class TestReconcileDrift(TransactionCase):
             calls["kwargs"] = kw
             return "orc-uid-1"
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             provision_user=fake_provision,
             push_odoo_key=lambda **kw: None,
         ):
@@ -249,8 +250,8 @@ class TestReconcileDrift(TransactionCase):
 
     def test_rotate_stamps_ok_on_success(self):
         self._force_rotation_due(self.user)
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             provision_user=lambda **kw: "orc-uid-1",
             push_odoo_key=lambda **kw: None,
         ):
@@ -266,8 +267,8 @@ class TestReconcileDrift(TransactionCase):
         def fail(**kw):
             raise UserError("ORC down")
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             provision_user=fail,
             push_odoo_key=lambda **kw: None,
         ):
@@ -294,8 +295,8 @@ class TestReconcileDrift(TransactionCase):
         """Create a user with a bare (non-email) login, provision them,
         then clear orc_gateway_email to simulate the pre-fix state."""
         user = self.env["res.users"].create({"name": "Bare Login", "login": login})
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             provision_user=lambda **kw: "orc-uid-bare",
             push_odoo_key=lambda **kw: None,
         ):
@@ -313,8 +314,8 @@ class TestReconcileDrift(TransactionCase):
         bare = self._make_bare_login_user()
         self.assertFalse(bare.orc_gateway_email)
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [
                     {"email": self.user.login, "role": "user"},
@@ -339,8 +340,8 @@ class TestReconcileDrift(TransactionCase):
         self.assertFalse(bare.orc_gateway_email)
         qualified = bare._orc_effective_email()   # "admin_test_heal@myco.odoo.com"
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [
                     {"email": self.user.login, "role": "user"},
@@ -372,8 +373,8 @@ class TestReconcileDrift(TransactionCase):
             calls["provision"] += 1
             return "orc-uid-dup"
 
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [
                     {"email": self.user.login, "role": "user"},
@@ -395,8 +396,8 @@ class TestReconcileDrift(TransactionCase):
         self.assertEqual(bare.orc_last_sync_status, "ok")
 
     def test_cron_orc_sync_runs_reconcile(self):
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             list_users=lambda *a, **kw: {
                 "users": [{"email": self.user.login, "role": "user"}],
                 "infrastructures": [],
@@ -408,8 +409,8 @@ class TestReconcileDrift(TransactionCase):
 
     def test_cron_orc_maintenance_runs_rotate(self):
         self._force_rotation_due(self.user)
-        with patch.multiple(
-            self.env["orc.client"],
+        with patch_orc_client(
+            self.env,
             provision_user=lambda **kw: "orc-uid-1",
             push_odoo_key=lambda **kw: None,
         ):
