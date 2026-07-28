@@ -99,7 +99,11 @@
             <div class="o_orc_chat_window_header"
                  t-on-click="onToggleFold">
                 <span class="o_orc_chat_window_title">
-                    <t t-esc="title"/>
+                    <!-- text in its own span: text-overflow needs a block
+                         box, not an anonymous flex item — and keeping the
+                         unread dot a flex sibling means it survives
+                         truncation of long titles. -->
+                    <span class="o_orc_chat_window_title_text" t-esc="title"/>
                     <span t-if="unread" class="o_orc_chat_unread_dot"/>
                 </span>
                 <div class="o_orc_chat_window_actions">
