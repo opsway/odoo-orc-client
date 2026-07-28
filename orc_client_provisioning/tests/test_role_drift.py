@@ -9,6 +9,7 @@ form view reflects the cron's last verdict.
 Tests mock the ORC HTTP client so they can hand-craft remote
 payloads + force errors without hitting the network.
 """
+from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import TransactionCase
 
@@ -243,20 +244,43 @@ class TestReconcileDrift(TransactionCase):
     # invisible to admins).
 
     def _force_rotation_due(self, user):
-        """Set orc.rotation_days=0 so every enrolled user is past TTL."""
-        self.env["ir.config_parameter"].sudo().set_param("orc.rotation_days", "0")
-        # action_orc_provision() in setUp left orc_last_rotation_at = now;
-        # with rotation_days=0 the cron's "< cutoff" predicate matches.
+        """Backdate the user past their rotation TTL.
+
+        Setting `orc.rotation_days = 0` is NOT enough — that was the previous
+        approach and it silently disabled these tests. `fields.Datetime.now()`
+        is second-granular, so with a 0-day TTL the cron's cutoff equals the
+        `orc_last_rotation_at` that setUp's provision just stamped in the same
+        second; its predicate is a strict `<`, so the user drops out of `due`,
+        the rotate branch never runs, and the assertions below silently read
+        setUp's leftover "provisioned on save" / "ok" stamp instead.
+        """
+        icp = self.env["ir.config_parameter"].sudo()
+        rotation_days = int(icp.get_param("orc.rotation_days") or 30)
+        user.sudo().write({
+            "orc_last_rotation_at": fields.Datetime.subtract(
+                fields.Datetime.now(), days=rotation_days + 1,
+            ),
+        })
 
     def test_rotate_stamps_ok_on_success(self):
         self._force_rotation_due(self.user)
+        calls = {"provision": 0}
+
+        def spy_provision(**kw):
+            calls["provision"] += 1
+            return "orc-uid-1"
+
         with patch_orc_client(
             self.env,
-            provision_user=lambda **kw: "orc-uid-1",
+            provision_user=spy_provision,
             push_odoo_key=lambda **kw: None,
         ):
             self.env["res.users"]._cron_orc_rotate_keys()
         self.user.invalidate_recordset()
+        # Assert the cron actually rotated. Without this a skipped rotation
+        # passes the status check on setUp's leftover "ok" — how the broken
+        # `_force_rotation_due` above stayed invisible.
+        self.assertEqual(calls["provision"], 1, "expected the cron to rotate the key")
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("rotated", self.user.orc_last_sync_message or "")
         self.assertTrue(self.user.orc_last_sync_at)
