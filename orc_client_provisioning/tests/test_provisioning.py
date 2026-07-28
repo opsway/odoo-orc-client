@@ -1,7 +1,7 @@
-from unittest.mock import patch
-
 from odoo.exceptions import MissingError, UserError
 from odoo.tests import TransactionCase
+
+from .common import patch_orc_client, share_test_cursor
 
 
 class TestOrcProvisioning(TransactionCase):
@@ -14,6 +14,7 @@ class TestOrcProvisioning(TransactionCase):
 
     def setUp(self):
         super().setUp()
+        share_test_cursor(self)
         self.user = self.env["res.users"].create({
             "name": "Alice Example",
             "login": "alice@acme.test",
@@ -24,7 +25,6 @@ class TestOrcProvisioning(TransactionCase):
         icp.set_param("orc.infrastructure_id", "11111111-1111-1111-1111-111111111111")
 
     def _patch_client(self, **overrides):
-        client = self.env["orc.client"]
         defaults = {
             "provision_user": lambda **kw: "orc-uid-1",
             "push_odoo_key": lambda **kw: None,
@@ -34,8 +34,8 @@ class TestOrcProvisioning(TransactionCase):
             "list_users": lambda **kw: {"users": []},
         }
         defaults.update(overrides)
-        return patch.multiple(
-            client,
+        return patch_orc_client(
+            self.env,
             provision_user=defaults["provision_user"],
             push_odoo_key=defaults["push_odoo_key"],
             revoke_infra_access=defaults["revoke_infra_access"],
