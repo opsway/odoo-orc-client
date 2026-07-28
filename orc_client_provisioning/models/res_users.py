@@ -444,12 +444,23 @@ class ResUsers(models.Model):
         # AND tries to keep / flip `orc_enabled=True` is rewritten to
         # clear orc_enabled.  The onchange above handles the form UX;
         # this handles scripted / XML-RPC writes that bypass onchange.
-        # We mutate the incoming `vals` so the in-flight save (and
-        # any downstream code that reads vals) sees the corrected
-        # shape.
+        # We continue the save from a corrected copy of `vals`, so the
+        # in-flight write (and the cascade below, which reads
+        # `flip_to` off it) sees the corrected shape.  The caller's own
+        # dict is left alone.
         if "login" in vals:
             for user in self:
-                if user.login != vals["login"] and user.orc_enabled:
+                if user.login == vals["login"]:
+                    continue
+                # Test the EFFECTIVE post-write value, not the stored one: a
+                # single write can both rename and flip orc_enabled on, and
+                # enrolling under a login the admin never consciously
+                # enrolled is exactly what this guard exists to prevent.  For
+                # a previously-deprovisioned user the `orc_user_id`
+                # breadcrumb still points at the OLD gateway identity, so
+                # provisioning under the new login would mint a second one
+                # and orphan the first.
+                if vals.get("orc_enabled", user.orc_enabled):
                     vals = {**vals, "orc_enabled": False}
                     break
 
