@@ -63,7 +63,6 @@ msgstr "Nazwa wyświetlana"
 
 #. module: orc_client_provisioning
 #: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__status__drift
-#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__res_users__orc_last_sync_status__drift
 msgid "Drift"
 msgstr "Rozbieżność"
 
@@ -200,6 +199,11 @@ msgstr "Dziennik audytu rejestracji AI Workplace"
 #: code:addons/orc_client_provisioning/static/src/js/orc_systray.xml:0
 msgid "Open AI Workplace"
 msgstr "Otwórz AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__orphan_remote_user
+msgid "Orphan remote user"
+msgstr ""
 
 #. module: orc_client_provisioning
 #: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__provision
