@@ -9,6 +9,8 @@ form view reflects the cron's last verdict.
 Tests mock the ORC HTTP client so they can hand-craft remote
 payloads + force errors without hitting the network.
 """
+from unittest.mock import patch
+
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests import TransactionCase
@@ -56,6 +58,100 @@ class TestReconcileDrift(TransactionCase):
         ], limit=1)
         self.assertTrue(log)
         self.assertIn("ghost@acme.test", log.error)
+
+    def test_residual_failure_does_not_abort_the_whole_reconcile(self):
+        """Direction B is isolated per remote entry.
+
+        The revoke call was already wrapped; the orphan audit-row write was
+        NOT, and that is the one that fired in production (an action value
+        missing from the Selection). Anything raised there escaped
+        `_cron_orc_reconcile` and rolled the tick back — remaining residual
+        entries unprocessed, every Direction-A stamp discarded, and the cron
+        looking like it had never run.
+
+        So force the failure where the gap actually was: make the orphan write
+        raise. Two orphans, and we assert BOTH were attempted — deliberately
+        order-independent, since `residual_remote` is a set. Without per-entry
+        isolation the loop stops after the first, whichever that is.
+        """
+        audit_cls = type(self.env["orc.audit.log"])
+        real_create = audit_cls.create
+        orphan_attempts = []
+
+        def refuse_orphan_rows(model_self, vals_list):
+            vals = vals_list[0] if isinstance(vals_list, list) and vals_list else vals_list
+            if isinstance(vals, dict) and vals.get("action") == "orphan_remote_user":
+                orphan_attempts.append(vals.get("error"))
+                raise UserError("audit write refused")
+            return real_create(model_self, vals_list)
+
+        # alice stays enabled and present remotely, so Direction A stamps her
+        # "in sync" BEFORE Direction B runs — that stamp is what a rollback
+        # would silently destroy.
+        with patch.object(audit_cls, "create", refuse_orphan_rows), patch_orc_client(
+            self.env,
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user"},
+                    {"email": "ghost-one@acme.test", "role": "user"},
+                    {"email": "ghost-two@acme.test", "role": "user"},
+                ],
+                "infrastructures": [],
+            },
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.assertEqual(
+            len(orphan_attempts), 2,
+            "both orphans must be attempted — the loop stopped at the first",
+        )
+        # Direction A's work survived rather than being rolled back.
+        self.user.invalidate_recordset()
+        self.assertEqual(self.user.orc_last_sync_status, "ok")
+        self.assertEqual(self.user.orc_last_sync_message, "in sync")
+
+    def test_residual_revoke_failure_is_recorded_against_the_user(self):
+        """A failing revoke stamps that user red and keeps going.
+
+        Complements the test above: this covers the branch that WAS already
+        guarded, so the two together pin both halves of the loop's contract.
+        """
+        with patch_orc_client(self.env, revoke_infra_access=lambda **kw: None):
+            other = self.env["res.users"].create({
+                "name": "Bob Example", "login": "bob@acme.test",
+            })
+            with patch_orc_client(
+                self.env,
+                provision_user=lambda *a, **kw: "orc-uid-2",
+                push_odoo_key=lambda *a, **kw: None,
+            ):
+                other.orc_enabled = True
+            other.orc_enabled = False
+
+        def revoke_fails(**kw):
+            raise UserError("boom on bob")
+
+        with patch_orc_client(
+            self.env,
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user"},
+                    {"email": other.login, "role": "user"},
+                ],
+                "infrastructures": [],
+            },
+            revoke_infra_access=revoke_fails,
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        other.invalidate_recordset()
+        self.assertEqual(other.orc_last_sync_status, "error")
+        self.assertIn("boom on bob", other.orc_last_sync_message or "")
+        self.assertTrue(self.env["orc.audit.log"].search([
+            ("user_id", "=", other.id),
+            ("action", "=", "reconcile"),
+            ("status", "=", "error"),
+        ], limit=1))
 
     def test_no_drift_no_log(self):
         with patch_orc_client(

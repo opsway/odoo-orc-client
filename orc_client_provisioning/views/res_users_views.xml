@@ -26,7 +26,6 @@
                             name="orc_last_sync_status"
                             widget="badge"
                             decoration-success="orc_last_sync_status == 'ok'"
-                            decoration-warning="orc_last_sync_status == 'drift'"
                             decoration-danger="orc_last_sync_status == 'error'"
                             invisible="not orc_enabled"
                         />
