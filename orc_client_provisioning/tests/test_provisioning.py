@@ -64,7 +64,10 @@ class TestOrcProvisioning(TransactionCase):
         self.user.invalidate_recordset()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
-        self.assertIn("provisioned", self.user.orc_last_sync_message or "")
+        # Exact string, not `assertIn("provisioned", ...)`: the loose form is
+        # also satisfied by "deprovisioned on save" and "re-provisioned to AI
+        # Workplace", so it could not tell provision from its opposite.
+        self.assertEqual(self.user.orc_last_sync_message, "provisioned on save")
 
     def test_push_odoo_key_payload_does_not_include_access_level(self):
         # INT-842: per-user access axis was dropped. push_odoo_key
@@ -356,8 +359,11 @@ class TestOrcProvisioning(TransactionCase):
         prior_uid = self.user.orc_user_id
         self.assertTrue(prior_uid)
 
-        # Write that changes login.  No need to mock the client — the
-        # write override must short-circuit before any provisioning.
+        # The client DOES get called: injecting orc_enabled=False sends the
+        # save into the deprovision branch, which makes a synchronous
+        # revoke_infra_access call.  (An earlier comment here claimed the
+        # override short-circuits before touching the client — it does not,
+        # and the mock below is load-bearing.)
         with self._patch_client():
             self.user.sudo().write({"login": "renamed@acme.test"})
 
@@ -366,6 +372,56 @@ class TestOrcProvisioning(TransactionCase):
         # Breadcrumb retained — re-enabling re-provisions cleanly
         # against the new login.
         self.assertEqual(self.user.orc_user_id, prior_uid)
+
+    def test_write_login_change_survives_gateway_outage(self):
+        """A login rename must not be blocked by an AI Workplace outage.
+
+        The rename injects orc_enabled=False, which routes the save into
+        action_orc_deprovision() and its synchronous revoke_infra_access call.
+        If that raises, aborting the whole write would leave the admin with
+        neither the rename NOR the revoke — and the user still enrolled. So
+        the failure is swallowed, stamped red, and left for reconcile's
+        Direction B to retry on the next tick.
+        """
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_user_id)
+
+        def gateway_down(**kw):
+            raise UserError("AI Workplace unreachable")
+
+        with self._patch_client(revoke_infra_access=gateway_down):
+            self.user.sudo().write({"login": "renamed@acme.test"})
+
+        self.user.invalidate_recordset()
+        # The rename landed and access is off locally, despite the outage.
+        self.assertEqual(self.user.login, "renamed@acme.test")
+        self.assertFalse(self.user.orc_enabled)
+        # ...and the failure is visible rather than silent.
+        self.assertEqual(self.user.orc_last_sync_status, "error")
+        self.assertIn("AI Workplace unreachable", self.user.orc_last_sync_message or "")
+        # orc_user_id is retained, so reconcile Direction B picks the user up
+        # (orc_enabled=False + orc_user_id set) and retries the revoke.
+        self.assertTrue(self.user.orc_user_id)
+
+    def test_write_explicit_untick_still_raises_on_gateway_outage(self):
+        """The swallow above is scoped to the rename path only.
+
+        An admin deliberately unticking the checkbox is a direct request to
+        revoke; if that can't be honoured they must be told, not handed a
+        silent half-success.
+        """
+        with self._patch_client():
+            self.user.orc_enabled = True
+        self.user.invalidate_recordset()
+
+        def gateway_down(**kw):
+            raise UserError("AI Workplace unreachable")
+
+        with self._patch_client(revoke_infra_access=gateway_down):
+            with self.assertRaises(UserError):
+                self.user.sudo().write({"orc_enabled": False})
 
     def test_write_no_login_change_preserves_orc_enabled(self):
         """The login-change guard only fires on an actual change.
