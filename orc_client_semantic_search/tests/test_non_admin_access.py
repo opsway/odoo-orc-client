@@ -30,6 +30,7 @@ class NonAdminAccessTests(TransactionCase):
         cls.config = cls.env["orc.embedding.config"].search(
             [("is_global", "=", True)], limit=1,
         )
+        assert cls.config, "the module data must ship a global config row"
         cls.config.write({"provider_api_key": "sk-test", "vector_dim": 4})
 
         # A plain internal user: no Settings access, so no rights on
@@ -76,7 +77,10 @@ class NonAdminAccessTests(TransactionCase):
         article = self.env["knowledge.article"].create({
             "name": "Indexed", "body": "<p>x</p>",
         })
+        # Start from an empty index so the ranking below only has
+        # the row seeded here to work with.
         self.env["orc.embedding.queue"].sudo().search([]).unlink()
+        self.env["orc.embedding"].sudo().search([]).unlink()
         self.env["orc.embedding"].sudo().create({
             "model": "knowledge.article",
             "res_id": article.id,

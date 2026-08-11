@@ -34,10 +34,13 @@ class KnowledgeArticle(models.Model):
 
     def write(self, vals):
         result = super().write(vals)
-        # Only enqueue when one of the indexed text fields changed.
-        # The Settings page allows the operator to set the field
-        # path; if it's something we haven't anticipated, fall
-        # back to the safe choice of always enqueueing.
+        # Only enqueue when the indexed text field changed. No
+        # config row (or a disabled one) means the model isn't
+        # indexed at all, so there is nothing to enqueue. The field
+        # comes from the Settings page and is matched against `vals`
+        # by name — same shape the cron reads it back with, so a
+        # path the rest of the module can't resolve doesn't enqueue
+        # here either.
         cfg = self.env["orc.embedding.config"].sudo().search([
             ("is_global", "=", False),
             ("model_name", "=", "knowledge.article"),
