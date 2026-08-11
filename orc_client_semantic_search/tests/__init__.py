@@ -8,3 +8,4 @@ from . import test_data_model
 from . import test_hash_skip
 from . import test_indexing_lifecycle
 from . import test_semantic_search
+from . import test_non_admin_permissions

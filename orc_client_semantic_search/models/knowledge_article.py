@@ -32,7 +32,10 @@ class KnowledgeArticle(models.Model):
         # The Settings page allows the operator to set the field
         # path; if it's something we haven't anticipated, fall
         # back to the safe choice of always enqueueing.
-        cfg = self.env["orc.embedding.config"].search([
+        # sudo(): orc.embedding.config is admin-only by design, but
+        # any user editing an article must be able to look it up to
+        # decide whether the write touched an indexed field. GF-295.
+        cfg = self.env["orc.embedding.config"].sudo().search([
             ("is_global", "=", False),
             ("model_name", "=", "knowledge.article"),
             ("enabled", "=", True),
@@ -46,8 +49,13 @@ class KnowledgeArticle(models.Model):
         return result
 
     def unlink(self):
-        Embedding = self.env["orc.embedding"]
-        Queue = self.env["orc.embedding.queue"]
+        # sudo(): dropping the embedding + queue rows is a side
+        # effect of a delete the user is already allowed to perform.
+        # Both models are admin-only by design (see
+        # security/ir.model.access.csv), so elevate just this
+        # bookkeeping instead of exposing them to users. GF-295.
+        Embedding = self.env["orc.embedding"].sudo()
+        Queue = self.env["orc.embedding.queue"].sudo()
         ids = self.ids
         if ids:
             Embedding.search([
@@ -66,7 +74,11 @@ class KnowledgeArticle(models.Model):
         for an already-queued record is a no-op."""
         if not self:
             return
-        Queue = self.env["orc.embedding.queue"]
+        # sudo(): the queue is admin-only by design; enqueuing a
+        # marker is a system side effect of a create/write the user
+        # is already allowed to do. Elevate just this bookkeeping so
+        # non-admin users aren't blocked with an AccessError. GF-295.
+        Queue = self.env["orc.embedding.queue"].sudo()
         existing = Queue.search([
             ("model", "=", "knowledge.article"),
             ("res_id", "in", self.ids),
