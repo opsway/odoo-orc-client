@@ -17,6 +17,12 @@ _logger = logging.getLogger(__name__)
 #   here saves the queue churn.
 # - unlink: drop the embedding row. Stale ids in the index would
 #   surface as 404s the moment the agent tries to read them.
+#
+# All three hooks touch orc.embedding* with `sudo()`: those are
+# technical models the end user has no rights on, and the article
+# author must not need any. Only the bookkeeping is elevated — the
+# article recordset itself stays on the caller's environment, so
+# ir.rule keeps deciding what they may write and delete.
 class KnowledgeArticle(models.Model):
     _inherit = "knowledge.article"
 
@@ -32,7 +38,7 @@ class KnowledgeArticle(models.Model):
         # The Settings page allows the operator to set the field
         # path; if it's something we haven't anticipated, fall
         # back to the safe choice of always enqueueing.
-        cfg = self.env["orc.embedding.config"].search([
+        cfg = self.env["orc.embedding.config"].sudo().search([
             ("is_global", "=", False),
             ("model_name", "=", "knowledge.article"),
             ("enabled", "=", True),
@@ -46,8 +52,8 @@ class KnowledgeArticle(models.Model):
         return result
 
     def unlink(self):
-        Embedding = self.env["orc.embedding"]
-        Queue = self.env["orc.embedding.queue"]
+        Embedding = self.env["orc.embedding"].sudo()
+        Queue = self.env["orc.embedding.queue"].sudo()
         ids = self.ids
         if ids:
             Embedding.search([
@@ -66,7 +72,7 @@ class KnowledgeArticle(models.Model):
         for an already-queued record is a no-op."""
         if not self:
             return
-        Queue = self.env["orc.embedding.queue"]
+        Queue = self.env["orc.embedding.queue"].sudo()
         existing = Queue.search([
             ("model", "=", "knowledge.article"),
             ("res_id", "in", self.ids),

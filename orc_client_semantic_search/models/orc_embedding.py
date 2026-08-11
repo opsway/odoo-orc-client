@@ -68,8 +68,13 @@ class OrcEmbedding(models.Model):
 
         Test seam: the test suite patches this to inject mocks. Keep
         the factory shape stable (no kwargs from callers).
+
+        Read as sudo: semantic_search runs as the end user, who has
+        no rights on the config row — and must not get them, since
+        it carries the provider API key. The key never leaves this
+        method.
         """
-        cfg = self.env["orc.embedding.config"].get_global()
+        cfg = self.env["orc.embedding.config"].sudo().get_global()
         return OpenAIEmbeddingProvider(
             url=cfg.provider_url or "https://api.openai.com/v1/embeddings",
             api_key=cfg.provider_api_key,
@@ -260,8 +265,10 @@ class OrcEmbedding(models.Model):
             limit = 10
         limit = max(1, min(limit, _SEARCH_MAX_LIMIT))
 
-        # Resolve which models to search.
-        Config = self.env["orc.embedding.config"]
+        # Resolve which models to search. The caller is the end
+        # user; the config rows are operator-only, so read them
+        # elevated. Only model names leave this block.
+        Config = self.env["orc.embedding.config"].sudo()
         enabled_cfgs = Config.search([
             ("is_global", "=", False), ("enabled", "=", True),
         ])
