@@ -44,6 +44,18 @@ This means we deliberately do **not** replicate Odoo's dynamic
 record rules in the index. Adding model B to the indexed set is a
 config-row change with zero ACL implications.
 
+**Bookkeeping runs with elevated rights.** The `orc.embedding*`
+models are internal plumbing, not business data: an end user never
+addresses them directly, they only get touched as a side effect of
+a business action (writing an article, running a search). So every
+internal access to them — the create/write/unlink hooks that
+maintain the queue, and the config reads that build the provider —
+runs `sudo()`. The alternative, granting write access on the queue
+to every internal user, would put a technical model in the reach
+of the UI and still not cover portal-side writes. The business
+record itself is **never** sudo'd: the article recordset stays on
+the user's own environment, so `ir.rule` decides as before.
+
 **Business-user explainer:** see
 [`docs/semantic-search-security.md`](docs/semantic-search-security.md)
 for a sequence diagram + narrative aimed at admins / operators who
