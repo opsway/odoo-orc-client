@@ -82,6 +82,25 @@ class OrcEmbedding(models.Model):
             dim=cfg.vector_dim or 1536,
         )
 
+    @api.model
+    def _charge_reported_usage(self, global_cfg, provider):
+        """Charge whatever the provider said it billed, and clear it.
+
+        Only for the failure paths: a successful embed charges an
+        estimate when the upstream reports nothing, but a failure
+        must charge nothing unless the upstream actually said it
+        billed something — otherwise a network error, which costs
+        nothing, would eat the day's budget.
+
+        Returns the number of tokens charged.
+        """
+        reported = getattr(provider, "last_usage_tokens", None)
+        if not isinstance(reported, int) or reported <= 0:
+            return 0
+        global_cfg._token_budget_consume(reported)
+        provider.last_usage_tokens = None
+        return reported
+
     # ------------------------------------------------------------ cron
 
     @api.model
@@ -91,19 +110,29 @@ class OrcEmbedding(models.Model):
 
         For each row:
           1. Read the source record.
-          2. Extract text per the model's configured extractor.
-          3. Truncate to ~8K chars if needed.
-          4. Hash; if matches an existing embedding row, drop the
+          2. Check scope. Out of scope → delete any embedding row,
+             drop the queue row, next. This is the authoritative
+             gate on what may be sent to the provider; see README
+             "Index scope".
+          3. Extract text per the model's configured extractor.
+          4. Truncate to ~8K chars if needed.
+          5. Hash; if matches an existing embedding row, drop the
              queue row without calling the provider (hash-skip).
-          5. Call provider.embed; upsert the embedding row; drop
-             the queue row.
-          6. On provider error: leave the queue row, bump attempts,
+          6. Check today's token budget. Exhausted → leave the row
+             queued for tomorrow.
+          7. Call provider.embed; charge the budget; upsert the
+             embedding row; drop the queue row.
+          8. On provider error: leave the queue row, bump attempts,
              store last_error.
+
+        Steps 1–5 cost nothing, so they run even when the budget is
+        spent or no API key is set: cleanup must not be blocked on a
+        budget, or ticking "exclude" would silently wait for a refill.
 
         Per-record, no batching. Batching is a v2 optimization.
         """
-        Config = self.env["orc.embedding.config"]
-        Queue = self.env["orc.embedding.queue"]
+        Config = self.env["orc.embedding.config"].sudo()
+        Queue = self.env["orc.embedding.queue"].sudo()
 
         # Build the (model_name → cfg row) map so we don't search
         # per-record. Disabled rows still appear in the queue if a
@@ -113,25 +142,56 @@ class OrcEmbedding(models.Model):
             c.model_name: c
             for c in Config.search([("is_global", "=", False)])
         }
+        # One health check per config per pass, not per queue row. A
+        # model whose domain no longer evaluates is left strictly
+        # alone this pass: not embedded (we can't say it's in scope)
+        # and not purged (we can't say it isn't).
+        scope_errors = {
+            name: cfg._index_scope_error()
+            for name, cfg in configs.items()
+        }
 
-        # Build provider lazily — only if we have work to do AND
-        # the global config has its key. Empty-queue should not
-        # raise if the operator hasn't filled the key yet.
         queue_rows = Queue.search([])
         if not queue_rows:
             return
 
-        try:
-            provider = self._build_provider()
-        except UserError as exc:
-            _logger.warning("cron_reindex_sweep: %s", exc)
+        global_cfg = Config.search([("is_global", "=", True)], limit=1)
+        if not global_cfg:
+            _logger.warning(
+                "cron_reindex_sweep: no global config row; nothing to do.",
+            )
             return
+
+        # The provider is built on first need, not up front. A pass
+        # that only has purging to do must still do it — with no key
+        # set, and with the budget spent.
+        provider = None
+        budget = global_cfg._token_budget_remaining()
+        if budget <= 0:
+            used_so_far, _d = global_cfg._token_budget_state()
+            _logger.info(
+                "cron_reindex_sweep: daily token cap reached or paused "
+                "(cap=%s used=%s); embedding is skipped this pass, "
+                "out-of-scope cleanup still runs.",
+                global_cfg.daily_token_cap, used_so_far,
+            )
 
         processed = 0
         skipped_hash = 0
         errors = 0
+        purged_scope = 0
+        deferred_budget = 0
+        spent_this_pass = 0
+
+        broken_scope = 0
 
         for q in queue_rows:
+            if scope_errors.get(q.model):
+                # Leave the row exactly where it is. Retried next pass;
+                # fixed by fixing the domain.
+                broken_scope += 1
+                continue
+
             cfg = configs.get(q.model)
             if cfg is None or not cfg.enabled:
                 # Stale queue row for a model that's no longer
@@ -148,7 +208,7 @@ class OrcEmbedding(models.Model):
                 q.unlink()
                 continue
 
-            record = target_model.browse(q.res_id).exists()
+            record = target_model.sudo().browse(q.res_id).exists()
             if not record:
                 # Source record was deleted between enqueue and
                 # sweep. Drop the queue row + any stale embedding.
@@ -157,6 +217,26 @@ class OrcEmbedding(models.Model):
                 self.search([
                     ("model", "=", q_model), ("res_id", "=", q_res_id),
                 ]).unlink()
+                continue
+
+            # THE scope gate. Everything upstream of here — the
+            # create/write hooks, Reindex all, Sync index scope — is
+            # an optimization: a queue row can outlive the settings
+            # that created it, so a domain tightened while rows are
+            # pending has to be honoured here or not at all.
+            #
+            # Deliberately placed before the text extraction and the
+            # budget check: dropping an out-of-scope vector is free,
+            # and must not wait for either.
+            if not cfg._filter_indexable(record):
+                q_model, q_res_id = q.model, q.res_id
+                q.unlink()
+                removed = self.search([
+                    ("model", "=", q_model), ("res_id", "=", q_res_id),
+                ])
+                if removed:
+                    removed.unlink()
+                    purged_scope += 1
                 continue
 
             # Extract text via the model's configured extractor.
@@ -169,8 +249,26 @@ class OrcEmbedding(models.Model):
                 q.unlink()
                 continue
 
-            raw = record[cfg.text_field_path] if cfg.text_field_path else ""
-            text = extractor(raw)
+            # A configured field can stop existing — a module upgrade
+            # renames or drops it — and the raise would abort the whole
+            # pass, not just this row. Charge it to the row instead, so
+            # one broken config doesn't stop every other model from
+            # being indexed.
+            try:
+                raw = record[cfg.text_field_path] if cfg.text_field_path else ""
+                text = extractor(raw)
+            except Exception as exc:
+                q.attempts += 1
+                q.last_error = "text_field_path %r unreadable: %s" % (
+                    cfg.text_field_path, exc,
+                )
+                errors += 1
+                _logger.error(
+                    "cron_reindex_sweep: %s/%s text_field_path %r is not "
+                    "readable (%s); leaving the row queued.",
+                    q.model, q.res_id, cfg.text_field_path, exc,
+                )
+                continue
 
             if not text:
                 # Nothing to embed; remove any stale embedding and
@@ -204,23 +302,69 @@ class OrcEmbedding(models.Model):
                 skipped_hash += 1
                 continue
 
+            # From here on the row costs money. Everything above was
+            # free, which is why the budget is checked here and not
+            # at the top of the pass.
+            if budget <= 0:
+                deferred_budget += 1
+                continue
+
+            if provider is None:
+                try:
+                    provider = self._build_provider()
+                except UserError as exc:
+                    # No key, or no global row. Nothing embeddable
+                    # can succeed this pass; the purges already done
+                    # stand.
+                    _logger.warning("cron_reindex_sweep: %s", exc)
+                    break
+
             try:
                 vectors = provider.embed([text])
             except EmbeddingProviderError as exc:
+                # A failure is not necessarily a free failure. The
+                # request can reach the upstream, be billed, and only
+                # then fail our own validation — a wrong `vector_dim`
+                # does exactly that. Charging it is what stops a
+                # misconfiguration from spending without limit: there
+                # is no attempt ceiling, so the row would otherwise be
+                # re-billed on every pass forever with the counter
+                # sitting at zero.
+                billed = self._charge_reported_usage(global_cfg, provider)
+                budget -= billed
+                spent_this_pass += billed
                 q.attempts += 1
                 q.last_error = str(exc)
                 errors += 1
                 _logger.warning(
-                    "cron_reindex_sweep: %s/%s provider error (attempt %d): %s",
-                    q.model, q.res_id, q.attempts, exc,
+                    "cron_reindex_sweep: %s/%s provider error (attempt %d, "
+                    "billed %s tokens): %s",
+                    q.model, q.res_id, q.attempts, billed, exc,
                 )
                 continue
 
             if not vectors or len(vectors[0]) != provider.dim:
+                billed = self._charge_reported_usage(global_cfg, provider)
+                budget -= billed
+                spent_this_pass += billed
                 q.attempts += 1
                 q.last_error = "provider returned mis-shaped vector"
                 errors += 1
                 continue
+
+            # Charge the day's budget. Prefer what the provider says
+            # it billed; fall back to the conventional chars÷4
+            # estimate when it reports nothing (or reports something
+            # that isn't a number, as a test double will).
+            reported = getattr(provider, "last_usage_tokens", None)
+            spent = (
+                reported if isinstance(reported, int) and reported > 0
+                else max(1, len(text) // 4)
+            )
+            global_cfg._token_budget_consume(spent)
+            budget -= spent
+            spent_this_pass += spent
+            provider.last_usage_tokens = None
 
             vec = np.array(vectors[0], dtype=np.float32)
             row_vals = {
@@ -241,9 +385,26 @@ class OrcEmbedding(models.Model):
             q.unlink()
             processed += 1
 
+        if broken_scope:
+            _logger.error(
+                "cron_reindex_sweep: %d queue row(s) skipped entirely — the "
+                "index domain no longer evaluates: %s",
+                broken_scope,
+                {k: v for k, v in scope_errors.items() if v},
+            )
+
+        # Read the day's total back through the counter's own cursor.
+        # `global_cfg.tokens_used_today` would report the value as it
+        # stood when this pass began — the sweep's snapshot cannot see
+        # the independent commits.
+        used_today, _usage_date = global_cfg._token_budget_state()
         _logger.info(
-            "cron_reindex_sweep: processed=%d errors=%d skipped_hash=%d",
-            processed, errors, skipped_hash,
+            "cron_reindex_sweep: processed=%d errors=%d skipped_hash=%d "
+            "purged_out_of_scope=%d deferred_no_budget=%d "
+            "skipped_broken_scope=%d spent_this_pass=%d tokens_today=%d/%d",
+            processed, errors, skipped_hash, purged_scope, deferred_budget,
+            broken_scope, spent_this_pass,
+            used_today, global_cfg.daily_token_cap,
         )
 
     # --------------------------------------------------- public search
