@@ -110,11 +110,6 @@ msgid "Cron interval (minutes)"
 msgstr "Interwał crona (minuty)"
 
 #. module: orc_client_semantic_search
-#: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__daily_token_cap
-msgid "Cron pauses on overrun and resumes the next day."
-msgstr "Cron wstrzymuje się po przekroczeniu i wznawia następnego dnia."
-
-#. module: orc_client_semantic_search
 #: model:ir.model.fields,field_description:orc_client_semantic_search.field_orc_embedding_config__daily_token_cap
 msgid "Daily token cap"
 msgstr "Dzienny limit tokenów"
@@ -458,3 +453,171 @@ msgstr "np. knowledge.article"
 #: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__provider_model
 msgid "e.g. text-embedding-3-small"
 msgstr "np. text-embedding-3-small"
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,field_description:orc_client_semantic_search.field_knowledge_article__orc_ai_index_exclude
+msgid "Exclude from AI index"
+msgstr "Wyłącz z indeksu AI"
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,help:orc_client_semantic_search.field_knowledge_article__orc_ai_index_exclude
+msgid ""
+"Keep this article out of the semantic-search index. Its text is then never "
+"sent to the embedding provider, and any vector it already has is deleted on "
+"the next indexing pass. The assistant can still read the article the normal "
+"way if you have access to it — it just can't find it by meaning."
+msgstr ""
+"Nie umieszczaj tego artykułu w indeksie wyszukiwania semantycznego. Jego "
+"treść nie zostanie wtedy nigdy wysłana do dostawcy embeddingów, a "
+"istniejący wektor zostanie usunięty przy następnym przebiegu indeksowania. "
+"Asystent nadal może przeczytać ten artykuł w zwykły sposób, jeśli masz do "
+"niego dostęp — po prostu nie znajdzie go po znaczeniu."
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,field_description:orc_client_semantic_search.field_orc_embedding_config__index_domain
+msgid "Index domain"
+msgstr "Domena indeksowania"
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__index_domain
+msgid ""
+"Odoo domain limiting which records of this model may be indexed — i.e. which "
+"records have their text sent to the embedding provider. Empty means every "
+"record. Example: [(\"category\", \"!=\", \"private\")]."
+msgstr ""
+"Domena Odoo ograniczająca, które rekordy tego modelu mogą być indeksowane — "
+"czyli których rekordów treść jest wysyłana do dostawcy embeddingów. Pusta "
+"oznacza wszystkie rekordy. Przykład: [(\"category\", \"!=\", \"private\")]."
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,field_description:orc_client_semantic_search.field_orc_embedding_config__tokens_used_today
+msgid "Tokens used today"
+msgstr "Tokeny wykorzystane dzisiaj"
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__tokens_used_today
+msgid ""
+"Running total for the day in 'Tokens usage date'. Reset by the cron on its "
+"first pass of a new day."
+msgstr ""
+"Suma bieżąca dla dnia wskazanego w polu „Data zużycia tokenów”. Zerowana "
+"przez zadanie cron przy pierwszym przebiegu nowego dnia."
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,field_description:orc_client_semantic_search.field_orc_embedding_config__tokens_usage_date
+msgid "Tokens usage date"
+msgstr "Data zużycia tokenów"
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__tokens_usage_date
+msgid "The day 'Tokens used today' refers to."
+msgstr "Dzień, do którego odnosi się pole „Tokeny wykorzystane dzisiaj”."
+
+#. module: orc_client_semantic_search
+#: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__daily_token_cap
+msgid ""
+"Tokens the reindex cron may spend per calendar day. It stops for the rest of "
+"the day on overrun and resumes at midnight. Set to 0 to pause indexing "
+"entirely."
+msgstr ""
+"Liczba tokenów, którą zadanie cron może wykorzystać w ciągu jednego dnia "
+"kalendarzowego. Po przekroczeniu limitu zatrzymuje się do końca dnia i "
+"wznawia o północy. Ustaw 0, aby całkowicie wstrzymać indeksowanie."
+
+#. module: orc_client_semantic_search
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_orc_embedding_config_form
+msgid "Preview scope"
+msgstr "Podejrzyj zakres"
+
+#. module: orc_client_semantic_search
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_orc_embedding_config_form
+msgid "Sync index scope"
+msgstr "Zsynchronizuj zakres indeksu"
+
+#. module: orc_client_semantic_search
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_orc_embedding_config_form
+msgid "Index scope"
+msgstr "Zakres indeksu"
+
+#. module: orc_client_semantic_search
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_knowledge_article_list_ai_exclude
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_knowledge_article_search_ai_exclude
+msgid "Excluded from AI index"
+msgstr "Wyłączone z indeksu AI"
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Index scope — %s"
+msgstr "Zakres indeksu — %s"
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid ""
+"%(total)s records. In scope: %(in_scope)s (%(dom)s excluded by domain, "
+"%(flag)s excluded per record). Already indexed: %(indexed)s.\n"
+"Would be SENT to the provider on the next passes: %(send)s. Vectors that "
+"would be DELETED as out-of-scope: %(purge)s."
+msgstr ""
+"Rekordów: %(total)s. W zakresie: %(in_scope)s (%(dom)s wykluczonych przez "
+"domenę, %(flag)s wykluczonych pojedynczo). Już zindeksowanych: %(indexed)s.\n"
+"Zostanie WYSŁANYCH do dostawcy w kolejnych przebiegach: %(send)s. Wektorów "
+"do USUNIĘCIA jako poza zakresem: %(purge)s."
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Index scope synced"
+msgstr "Zakres indeksu zsynchronizowany"
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid ""
+"Deleted %(purged)s out-of-scope vector(s) and queued %(enqueued)s record(s) "
+"for indexing. The cron embeds the queued ones on its next pass."
+msgstr ""
+"Usunięto %(purged)s wektor(ów) poza zakresem i skolejkowano %(enqueued)s "
+"rekord(ów) do zindeksowania. Zadanie cron wyliczy embeddingi przy następnym "
+"przebiegu."
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Preview scope applies to a per-model row."
+msgstr "Podgląd zakresu dotyczy wiersza modelu, nie wiersza globalnego."
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Sync index scope applies to a per-model row."
+msgstr "Synchronizacja zakresu dotyczy wiersza modelu, nie wiersza globalnego."
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Model %s is not installed on this database."
+msgstr "Model %s nie jest zainstalowany w tej bazie danych."
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Index domain is not a valid Python expression: %s"
+msgstr "Domena indeksowania nie jest poprawnym wyrażeniem Python: %s"
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid ""
+"Index domain must be a list of leaves, e.g. [(\"field\", \"=\", value)] — "
+"got %s."
+msgstr ""
+"Domena indeksowania musi być listą warunków, np. [(\"field\", \"=\", "
+"value)] — otrzymano %s."
+
+#. module: orc_client_semantic_search
+#. odoo-python
+#: code:addons/orc_client_semantic_search/models/orc_embedding_config.py:0
+msgid "Index domain is not valid for %(model)s: %(err)s"
+msgstr "Domena indeksowania jest nieprawidłowa dla %(model)s: %(err)s"

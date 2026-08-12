@@ -31,6 +31,11 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         if not texts:
             return []
 
+        # Clear first. A stale value from the previous call would be
+        # charged against a call that never reached the upstream —
+        # billing the tenant for a DNS failure.
+        self.last_usage_tokens = None
+
         body = {"model": self.model, "input": list(texts)}
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -70,8 +75,27 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
         try:
             payload = response.json()
+        except ValueError as exc:
+            raise EmbeddingProviderError(
+                f"unexpected response shape: {exc}",
+            ) from exc
+
+        # What the upstream says it billed, for the cron's daily cap.
+        # Optional in the OpenAI-compatible ecosystem, so absence is
+        # normal, not an error — the caller estimates instead.
+        #
+        # Read BEFORE validating `data`. A 200 that reports usage but
+        # omits or malforms the payload was still billed, and the cron
+        # charges failures only from what we captured here; capturing
+        # after the validation would make that class of failure look
+        # free and let it retry past the daily cap.
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        reported = usage.get("total_tokens") if isinstance(usage, dict) else None
+        self.last_usage_tokens = reported if isinstance(reported, int) else None
+
+        try:
             data = payload["data"]
-        except (ValueError, KeyError) as exc:
+        except (KeyError, TypeError) as exc:
             raise EmbeddingProviderError(
                 f"unexpected response shape: {exc}",
             ) from exc

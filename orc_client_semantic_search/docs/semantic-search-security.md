@@ -132,6 +132,48 @@ No password policies, scripts, or configurations.
 
 ---
 
+## What leaves your Odoo, and when
+
+The table above is about the *stored index*. Building that index is
+a separate step, and it is the one that sends data outside.
+
+To turn an article into a vector, its text is sent once to the
+embedding provider configured in Settings — OpenAI by default, under
+**your own** account and API key. This happens at index time: when
+the article is created, when its body is edited, or when an
+administrator runs a reindex. It does not happen when someone asks a
+question (only the question itself is sent then), and no end user is
+involved or present.
+
+So two facts hold at the same time, and both matter:
+
+- **Reading** an article is fully governed by your Odoo permissions,
+  as described above. Nothing changes there.
+- **Indexing** an article is not. Permissions are a property of
+  readers; indexing has no reader. Any article inside the configured
+  scope has its text transmitted, regardless of who may read it.
+
+That is why scope is configured separately, and why it is worth
+deciding deliberately:
+
+| Control | Where | What it does |
+|---|---|---|
+| **Enabled** | Settings → Technical → AI Semantic Search, per model | Off = nothing from that model is ever indexed |
+| **Index domain** | same row | A filter deciding which records are in scope. E.g. exclude personal articles, or include only articles already visible to everyone |
+| **Exclude from AI index** | on the article itself — an optional column in the article list, and a search filter of the same name | A per-article switch, available to anyone who can edit it |
+| **Preview scope** | same row | Reports how many articles the current settings would send, before anything is sent |
+
+Removing an article from scope deletes its vector, so it stops being
+findable. Narrowing the index domain takes effect the moment you
+save; a per-article exclusion takes effect on the next indexing pass
+(within minutes).
+
+What it does **not** do is retract the text that was already sent —
+that is governed by the provider's own retention terms, on your
+account. Decide scope before setting the API key, not after.
+
+---
+
 ## Practical implications for administrators
 
 - **Odoo access rules remain the single source of truth.** You
@@ -146,3 +188,8 @@ No password policies, scripts, or configurations.
 - **Off-boarding**: once permissions are removed, the assistant
   immediately stops letting that person into restricted
   articles — no separate "unhook from AI" action required.
+- **Indexing is the exception to "permissions are the single source
+  of truth."** Access rules decide who may read; they do not decide
+  what is sent to the embedding provider. Set the index scope for
+  that, and review it whenever the knowledge base takes on a new
+  category of content.

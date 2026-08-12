@@ -34,6 +34,13 @@ The full contract is in `README.md`. Read it before making changes.
 - **No legacy fallbacks.** When a config field is renamed or a
   model field changes shape, write a migration. Don't branch on
   "old shape vs new shape" at runtime.
+- **One scope predicate.** Whether a record may be sent to the
+  provider is decided by `orc.embedding.config._filter_indexable`
+  and nowhere else. The enqueue hooks, the cron, "Reindex all",
+  "Preview scope" and "Sync index scope" all call it. A second copy
+  of that logic — however small, however local — is the defect
+  class this module is most exposed to, because the copies disagree
+  silently and the disagreement is a record leaving the tenant.
 
 ## Workflow when extending the module
 
@@ -94,7 +101,10 @@ enough that a `requests.post` is clearer than a 50MB SDK.
 ## Debugging tips
 
 - Set `daily_token_cap=0` in Settings to pause the cron without
-  uninstalling.
+  uninstalling. (This is now enforced. Between the module's first
+  release and 18.0.0.3.0 the field was declared, rendered and
+  documented but read by nothing, so the tip was false and the cap
+  was not a cost or privacy control at all.)
 - The "Test provider" button issues a single embed of `"ping"` and
   surfaces auth / dimension / latency without writing anything.
 - The queue row's `last_error` field carries the most recent

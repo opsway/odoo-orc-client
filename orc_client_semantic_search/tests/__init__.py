@@ -9,3 +9,5 @@ from . import test_hash_skip
 from . import test_indexing_lifecycle
 from . import test_semantic_search
 from . import test_non_admin_access
+from . import test_index_scope
+from . import test_token_cap
