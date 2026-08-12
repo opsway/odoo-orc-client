@@ -21,6 +21,17 @@
                             help="Requires a non-empty Odoo login."
                         />
                         <field name="orc_is_manager" invisible="1"/>
+                        <!-- Sits with the access toggle, not with the sync
+                             metadata below: "may the AI write here?" is the
+                             question an admin is asking when they open this
+                             tab. Mirror of the dashboard's per-key flag —
+                             always readonly, changed there, and only as
+                             fresh as 'Last synced at' immediately below. -->
+                        <field
+                            name="orc_read_only"
+                            readonly="1"
+                            invisible="not orc_enabled"
+                        />
                         <field name="orc_last_sync_at" readonly="1" invisible="not orc_enabled"/>
                         <field
                             name="orc_last_sync_status"
@@ -47,6 +58,11 @@
         <field name="arch" type="xml">
             <xpath expr="//list/field[@name='login']" position="after">
                 <field name="orc_enabled" optional="show"/>
+                <!-- Hidden by default (the common case is read/write, so a
+                     column of empty checkboxes earns nothing); one click in
+                     the optional-columns menu turns the list into the
+                     "who can the AI write as?" overview. -->
+                <field name="orc_read_only" optional="hide"/>
             </xpath>
         </field>
     </record>

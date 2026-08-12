@@ -261,9 +261,16 @@ class OrcClientConfig(models.AbstractModel):
         in ``res.users._cron_orc_reconcile`` relies on for both
         directions of drift detection.
 
-        Response shape: ``{ok, users: [{email, name, role}]}``. The
-        legacy ``infrastructures`` field on the org-scoped endpoint
+        Response shape: ``{ok, users: [{email, name, role, read_only}]}``.
+        The legacy ``infrastructures`` field on the org-scoped endpoint
         is intentionally not surfaced here; reconcile only needs the
         per-infra user set.
+
+        ``read_only`` mirrors AI Workplace's per-key access posture and is
+        **optional** — a gateway older than this field simply omits it.
+        Consumers must treat "absent" as unknown and preserve whatever
+        they hold rather than defaulting to False; see
+        ``res.users._orc_mirror_read_only``. It is read-only here in both
+        senses: display-only in Odoo, and never sent back.
         """
         return self._request("GET", "/api/addon/infrastructure-users")

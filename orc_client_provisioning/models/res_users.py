@@ -105,6 +105,32 @@ class ResUsers(models.Model):
         readonly=True,
         copy=False,
     )
+    # MIRROR ONLY — AI Workplace is the sole authority for this flag.
+    #
+    # Admins administer users here, so they should be able to SEE whether
+    # a user's AI tools may write to Odoo without opening the dashboard.
+    # They must not be able to SET it here: an addon-authored copy would
+    # ride the reconcile/push path and clobber the dashboard's value on
+    # every tick (the class of bug fixed on the AI Workplace side by
+    # rotating credentials in place), and it would re-split a source of
+    # truth that was deliberately made singular when the old Odoo-side
+    # read-only RPC gate was removed in 18.0.1.6.0.
+    #
+    # Refreshed by `_cron_orc_reconcile` from the per-infra user list, so
+    # it is only as fresh as `orc_last_sync_at` — read the two together.
+    # Cleared on deprovision so a disabled user can't show a stale
+    # posture.
+    orc_read_only = fields.Boolean(
+        string="AI tools are read-only",
+        readonly=True,
+        copy=False,
+        help=(
+            "Whether this user's AI tools may only READ from Odoo. Managed in "
+            "the AI Workplace dashboard by an organization admin — this field "
+            "is a mirror and cannot be changed here. Reflects the state as of "
+            "'Last synced at'."
+        ),
+    )
     orc_gateway_email = fields.Char(
         string="Gateway email",
         readonly=True,
@@ -337,6 +363,27 @@ class ResUsers(models.Model):
             "orc_last_sync_message": (message or "")[:240],
         })
 
+    def _orc_mirror_read_only(self, remote):
+        """Mirror AI Workplace's read-only posture onto this user.
+
+        `remote` is one entry of the `/api/addon/infrastructure-users`
+        response. One-directional by design: we only ever copy INTO
+        Odoo, never push this field out (see the field's comment).
+
+        An older gateway omits `read_only` entirely. Treat a missing key
+        as "unknown" and leave the stored value alone rather than writing
+        False — writing would claim the user has write access, which is
+        the wrong way to be wrong, and would flap the field on every tick
+        against a gateway that hasn't shipped the field yet.
+        """
+        if not isinstance(remote, dict) or "read_only" not in remote:
+            return False
+        value = bool(remote.get("read_only"))
+        if self.orc_read_only == value:
+            return False
+        self.sudo().write({"orc_read_only": value})
+        return True
+
     def action_orc_provision(self):
         """Provision / re-provision this user in AI Workplace.
 
@@ -462,6 +509,10 @@ class ResUsers(models.Model):
                 "orc_enabled": False,
                 "orc_api_key_ref": 0,
                 "orc_last_rotation_at": False,
+                # Not a breadcrumb — a posture only means something while
+                # access exists. Leaving it set would show "read-only" next
+                # to a user who has no AI access at all.
+                "orc_read_only": False,
                 # orc_user_id + orc_provisioned_at kept as breadcrumbs;
                 # re-ticking replays provisioning against the same AI Workplace
                 # identity (provision_user is idempotent on the AI Workplace
@@ -669,6 +720,12 @@ class ResUsers(models.Model):
                 # calls (revoke, SSO, tasks) use the stable stored value.
                 if not user.orc_gateway_email:
                     user.sudo().write({"orc_gateway_email": email})
+                # Refresh the read-only mirror while we hold a definitive
+                # remote answer. Done before the key-validity branch below
+                # so it lands on the healed path too — that branch
+                # re-provisions and `continue`s, and the posture we just
+                # read is still the truth either way.
+                user._orc_mirror_read_only(remote_users[email])
                 # Validity guard: AI Workplace holding a key ROW is NOT proof
                 # the key works. If our local ownership pointer is lost
                 # (orc_api_key_ref empty, or dangling to a GC'd row), the key AI

@@ -538,3 +538,97 @@ class TestReconcileDrift(TransactionCase):
         self.user.invalidate_recordset()
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("rotated", self.user.orc_last_sync_message or "")
+
+
+class TestReadOnlyMirror(TransactionCase):
+    """The `orc_read_only` mirror — display-only, one-directional.
+
+    AI Workplace owns the flag (per-key, flipped by an org admin there).
+    Odoo copies it in so an admin administering users here can see
+    whether a user's AI tools may write, without opening the dashboard.
+    Nothing in the addon may push it back: the whole point of removing
+    the old Odoo-side read-only gate (18.0.1.6.0) was to make the
+    posture have exactly one author.
+    """
+
+    def setUp(self):
+        super().setUp()
+        share_test_cursor(self)
+        icp = self.env["ir.config_parameter"].sudo()
+        icp.set_param("orc.endpoint_url", "https://orc.test")
+        icp.set_param("orc.org_token", "orc_test_token")
+        icp.set_param("orc.infrastructure_id", "11111111-1111-1111-1111-111111111111")
+
+        self.user = self.env["res.users"].create({
+            "name": "Alice Example",
+            "login": "alice@acme.test",
+        })
+        with patch_orc_client(
+            self.env,
+            provision_user=lambda *a, **kw: "orc-uid-1",
+            push_odoo_key=lambda *a, **kw: None,
+        ):
+            self.user.orc_enabled = True
+
+    def _reconcile(self, remote_user):
+        with patch_orc_client(
+            self.env,
+            list_users=lambda *a, **kw: {"users": [remote_user], "infrastructures": []},
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+        self.user.invalidate_recordset()
+
+    def test_mirrors_read_only_true_from_remote(self):
+        self._reconcile({"email": self.user.login, "role": "user", "read_only": True})
+        self.assertTrue(self.user.orc_read_only)
+
+    def test_mirrors_read_only_back_to_false(self):
+        """An admin allowing writes again in the dashboard must clear the
+        mirror on the next tick — a one-way latch would leave the form
+        claiming read-only for a user who can now write."""
+        self._reconcile({"email": self.user.login, "role": "user", "read_only": True})
+        self.assertTrue(self.user.orc_read_only)
+        self._reconcile({"email": self.user.login, "role": "user", "read_only": False})
+        self.assertFalse(self.user.orc_read_only)
+
+    def test_absent_read_only_key_leaves_the_mirror_untouched(self):
+        """Older gateway that predates the field: the response simply has
+        no `read_only`. Treat that as unknown and preserve what we have.
+        Writing False would assert "this user can write" on no evidence,
+        and would flap the value on every tick."""
+        self._reconcile({"email": self.user.login, "role": "user", "read_only": True})
+        self.assertTrue(self.user.orc_read_only)
+        self._reconcile({"email": self.user.login, "role": "user"})
+        self.assertTrue(
+            self.user.orc_read_only,
+            "a response without `read_only` must not overwrite the mirror",
+        )
+
+    def test_deprovision_clears_the_mirror(self):
+        """A posture only means something while access exists — otherwise
+        the form shows 'read-only' beside a user with no AI access."""
+        self._reconcile({"email": self.user.login, "role": "user", "read_only": True})
+        self.assertTrue(self.user.orc_read_only)
+        with patch_orc_client(self.env, revoke_infra_access=lambda **kw: None):
+            self.user.orc_enabled = False
+        self.user.invalidate_recordset()
+        self.assertFalse(self.user.orc_read_only)
+
+    def test_mirror_is_never_pushed_to_the_gateway(self):
+        """Guard the one-directional invariant at the wire: no payload the
+        addon sends may carry the flag. If a future change starts pushing
+        it, the reconcile/push path will clobber the dashboard's value on
+        every tick — the failure this design exists to prevent."""
+        sent = []
+        with patch_orc_client(
+            self.env,
+            provision_user=lambda *a, **kw: sent.append(kw) or "orc-uid-1",
+            push_odoo_key=lambda *a, **kw: sent.append(kw),
+            list_users=lambda *a, **kw: {"users": [], "infrastructures": []},
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+        self.assertTrue(sent, "expected the re-provision path to send something")
+        for payload in sent:
+            self.assertNotIn("read_only", payload)
+            self.assertNotIn("orc_read_only", payload)
+            self.assertNotIn("access_level", payload)
