@@ -661,8 +661,16 @@ class OrcEmbeddingConfig(models.Model):
         transaction is a REPEATABLE READ snapshot that will never see
         those commits. Reading through ``self`` would hand back the
         value as it stood when the sweep began, for the whole sweep.
+
+        The flush is what makes that safe. Odoo defers writes per
+        field, so a `write` to the counter that has not been flushed
+        yet lives in ``env.all.towrite`` and is invisible to SQL —
+        the read would return the pre-write value and the cap would
+        not bind. Reaching for SQL means taking over the
+        synchronisation the ORM would otherwise do for us.
         """
         self.ensure_one()
+        self.flush_recordset(["tokens_used_today", "tokens_usage_date"])
         with self.pool.cursor() as cr:
             cr.execute(
                 "SELECT tokens_used_today, tokens_usage_date "
@@ -699,7 +707,7 @@ class OrcEmbeddingConfig(models.Model):
         """Add ``tokens`` to today's total, atomically, in a
         transaction of its own.
 
-        Two separate reasons for the shape of this, and dropping
+        Three separate reasons for the shape of this, and dropping
         either one breaks the cap:
 
         1. **Its own transaction.** A provider charge cannot be
@@ -719,13 +727,24 @@ class OrcEmbeddingConfig(models.Model):
            statement, where it sees its own prior commits, and the
            day-rollover reset folds into the same ``CASE``.
 
-        Under the test runner ``pool.cursor()`` is bound to the test
-        transaction, so this stays visible to assertions and still
-        rolls back at teardown.
+        3. **Flushed first.** Same reason as in
+           ``_token_budget_state``, but the consequence is worse: a
+           pending ORM write to the counter is flushed *after* this
+           statement — ``invalidate_recordset`` below triggers it —
+           and overwrites the increment with the stale cached value.
+           The charge is then lost while the money stays spent.
+
+        A note for tests: ``pool.cursor()`` is only bound to the test
+        transaction inside ``registry.enter_test_mode``, which
+        ``HttpCase`` enters and ``TransactionCase`` does not. A
+        ``TransactionCase`` exercising this therefore has to enter it
+        itself, or the commits here are real ones that outlive
+        teardown.
         """
         self.ensure_one()
         if tokens <= 0:
             return
+        self.flush_recordset(["tokens_used_today", "tokens_usage_date"])
         with self.pool.cursor() as cr:
             cr.execute(
                 """

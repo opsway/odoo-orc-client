@@ -9,11 +9,13 @@ already had.
 from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError, ValidationError
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import tagged
+
+from .common import SweepCase
 
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
-class IndexScopeTests(TransactionCase):
+class IndexScopeTests(SweepCase):
     def setUp(self):
         super().setUp()
         Config = self.env["orc.embedding.config"]
@@ -414,11 +416,24 @@ class IndexScopeTests(TransactionCase):
         because the domain was legal when it was saved.
         """
         self.cfg.write({"index_domain": '[("name", "!=", "x")]'})
+        # Land that write before going behind the ORM's back. Odoo
+        # defers writes per field, so without this the valid domain is
+        # still in `env.all.towrite` when the UPDATE runs, and the next
+        # flush — any later ORM call — puts it back over the top. The
+        # domain would then be perfectly valid by the time the sweep
+        # reads it, and the tests below would be asserting nothing.
+        self.env.flush_all()
         self.env.cr.execute(
             "UPDATE orc_embedding_config SET index_domain = %s WHERE id = %s",
             ['[("gone_in_an_upgrade", "=", 1)]', self.cfg.id],
         )
-        self.cfg.invalidate_recordset(["index_domain"])
+        self.env.invalidate_all()
+        self.assertEqual(
+            self.cfg.index_domain, '[("gone_in_an_upgrade", "=", 1)]',
+            "the broken domain must actually be what the code reads back — "
+            "two of the tests using this helper pass whether the domain is "
+            "broken or not, so a helper that silently no-ops is invisible",
+        )
 
     def test_a_broken_domain_does_not_purge(self):
         # "We can't tell what's in scope" must not mean "delete the

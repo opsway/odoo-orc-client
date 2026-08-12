@@ -13,15 +13,17 @@ documented pause switch into "unlimited".
 from unittest.mock import MagicMock, patch
 
 from odoo import fields
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import tagged
 
 from odoo.addons.orc_client_semantic_search.providers.base import (
     EmbeddingProviderError,
 )
 
+from .common import SweepCase
+
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
-class DailyTokenCapTests(TransactionCase):
+class DailyTokenCapTests(SweepCase):
     def setUp(self):
         super().setUp()
         Config = self.env["orc.embedding.config"]
@@ -303,13 +305,29 @@ class DailyTokenCapTests(TransactionCase):
         # cap still reading zero, which is exactly what the cap exists
         # to prevent.
         #
-        # Honest limit: under the test runner `pool.cursor()` is bound
-        # to the test transaction, so a "commit" here is a savepoint
-        # release. This pins that the charge is recorded *before* the
-        # failure and through the independent path; it does not
-        # reproduce production's cross-transaction durability. That
-        # part rests on the code shape, reviewed rather than executed.
+        # Honest limit, and it is a real one: this cannot assert
+        # durability after the fact from a TransactionCase. In test
+        # mode (entered in setUp) `pool.cursor()` proxies the test
+        # transaction, so the charge unwinds with the savepoint
+        # `assertRaises` opens. Outside test mode it would be a genuine
+        # second connection — which then blocks on the row lock this
+        # transaction already holds on the config row, and the test
+        # hangs instead of failing.
+        #
+        # So the assertion moves to the moment that IS observable: the
+        # charge must already be recorded when the later failure
+        # happens, and recorded through the independent path rather
+        # than as part of the sweep's own writes. Whether that survives
+        # a real rollback follows from the cursor being independent,
+        # which is asserted separately below. Cross-transaction
+        # durability rests on the code shape, reviewed not executed.
         self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+
+        charged_at_failure = []
+
+        def blow_up(*args, **kwargs):
+            charged_at_failure.append(self._used())
+            raise RuntimeError("something later blew up")
 
         provider = self._stub_provider()
         with self.assertRaises(RuntimeError):
@@ -319,16 +337,39 @@ class DailyTokenCapTests(TransactionCase):
                 return_value=provider,
             ):
                 with patch.object(
-                    type(self.Embedding), "create",
-                    side_effect=RuntimeError("something later blew up"),
+                    type(self.Embedding), "create", side_effect=blow_up,
                 ):
                     self.Embedding._cron_reindex_sweep()
 
         provider.embed.assert_called()
+        self.assertTrue(charged_at_failure, "the failure path never ran")
         self.assertGreater(
-            self._used(), 0,
-            "a billed call must stay charged even if the pass unwound",
+            charged_at_failure[0], 0,
+            "a billed call must be charged before the pass can unwind, "
+            "not as part of the transaction that unwinds",
         )
+
+    def test_the_charge_is_written_on_a_cursor_of_its_own(self):
+        # The other half of the guarantee above: the counter must not
+        # ride on the sweep's transaction. Asserted on the shape, since
+        # the durability it buys cannot be observed from here.
+        cursors = []
+        real_cursor = type(self.registry).cursor
+
+        def spy(registry_self, *args, **kwargs):
+            cursors.append(True)
+            return real_cursor(registry_self, *args, **kwargs)
+
+        with patch.object(type(self.registry), "cursor", spy):
+            self.global_cfg._token_budget_consume(42)
+
+        self.assertTrue(
+            cursors,
+            "the charge must go through registry.cursor(), not self.env.cr — "
+            "a provider charge cannot be rolled back, so its record must not "
+            "be rollback-able either",
+        )
+        self.assertEqual(self._used(), 42)
 
     def test_an_unreadable_text_field_does_not_abort_the_pass(self):
         # A removed text_field_path used to raise straight out of the
