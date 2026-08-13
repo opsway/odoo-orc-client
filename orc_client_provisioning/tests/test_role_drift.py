@@ -541,14 +541,19 @@ class TestReconcileDrift(TransactionCase):
 
 
 class TestReadOnlyMirror(TransactionCase):
-    """The `orc_read_only` mirror — display-only, one-directional.
+    """The `orc_read_only` cache — pull-refreshed, write-through.
 
-    AI Workplace owns the flag (per-key, flipped by an org admin there).
-    Odoo copies it in so an admin administering users here can see
-    whether a user's AI tools may write, without opening the dashboard.
-    Nothing in the addon may push it back: the whole point of removing
-    the old Odoo-side read-only gate (18.0.1.6.0) was to make the
-    posture have exactly one author.
+    AI Workplace owns the flag (per-key, gated there on the acting
+    human's org-admin permission). Odoo caches it so an admin working here
+    can SEE whether a user's AI tools may write, and can CHANGE it without
+    leaving the form.
+
+    The invariant is not "Odoo never writes" — it is that Odoo never
+    *decides*, and never re-asserts its cached copy. Refresh is pull-only;
+    authoring is an explicit call carrying the acting admin, made solely on
+    user action. Removing the old Odoo-side read-only gate (18.0.1.6.0) was
+    about the posture having ONE author, and a write-through that defers to
+    the platform's own permission check preserves exactly that.
     """
 
     def setUp(self):
@@ -614,11 +619,15 @@ class TestReadOnlyMirror(TransactionCase):
         self.user.invalidate_recordset()
         self.assertFalse(self.user.orc_read_only)
 
-    def test_mirror_is_never_pushed_to_the_gateway(self):
-        """Guard the one-directional invariant at the wire: no payload the
-        addon sends may carry the flag. If a future change starts pushing
-        it, the reconcile/push path will clobber the dashboard's value on
-        every tick — the failure this design exists to prevent."""
+    def test_flag_never_rides_the_provision_or_reconcile_payloads(self):
+        """The clobber-class guard, narrowed but not weakened.
+
+        There is now ONE outbound carrier of this flag — the explicit
+        `set_read_only` call from the write-through path. What must stay
+        true is that the PERIODIC payloads never carry it: a provision or
+        reconcile that asserted a local value would re-create the loop that
+        used to clobber dashboard-set state on every tick.
+        """
         sent = []
         with patch_orc_client(
             self.env,
@@ -632,3 +641,338 @@ class TestReadOnlyMirror(TransactionCase):
             self.assertNotIn("read_only", payload)
             self.assertNotIn("orc_read_only", payload)
             self.assertNotIn("access_level", payload)
+
+    def test_reconcile_mirror_refresh_makes_no_outbound_call(self):
+        """The most important guard in this file.
+
+        The cron pulls the remote value and stores it. If that local write
+        re-entered the write-through path, every tick would post the value
+        straight back — the clobber loop, one hop further out. Assert zero
+        outbound calls while the mirror is actually changing.
+        """
+        calls = []
+
+        def refuse(**kw):
+            calls.append(kw)
+
+        with patch_orc_client(
+            self.env,
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user", "read_only": True},
+                ],
+                "infrastructures": [],
+            },
+            set_read_only=refuse,
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_read_only, "mirror should have been refreshed")
+        self.assertEqual(calls, [], "the pull refresh must not post anything back")
+
+    def test_deprovision_clear_makes_no_outbound_call(self):
+        """Clearing the cache on deprovision is bookkeeping, not intent.
+
+        Posting it would target a credential that was just revoked.
+        """
+        with patch_orc_client(
+            self.env,
+            list_users=lambda *a, **kw: {
+                "users": [
+                    {"email": self.user.login, "role": "user", "read_only": True},
+                ],
+                "infrastructures": [],
+            },
+        ):
+            self.env["res.users"]._cron_orc_reconcile()
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_read_only)
+
+        calls = []
+        with patch_orc_client(
+            self.env,
+            revoke_infra_access=lambda **kw: None,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.orc_enabled = False
+
+        self.user.invalidate_recordset()
+        self.assertFalse(self.user.orc_read_only, "cache should be cleared")
+        self.assertEqual(calls, [], "deprovision must not post a posture change")
+
+    def test_editing_the_field_writes_through_as_the_acting_admin(self):
+        """User intent DOES go outbound, carrying the acting admin."""
+        calls = []
+        with patch_orc_client(
+            self.env,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.orc_read_only = True
+
+        self.assertEqual(len(calls), 1, "expected exactly one outbound call")
+        self.assertTrue(calls[0]["read_only"])
+        self.assertEqual(calls[0]["email"], self.user._orc_gateway_identity())
+        # The acting admin is the CURRENT user, resolved through the same
+        # derivation every other user-scoped call uses.
+        self.assertEqual(
+            calls[0]["acting_user"],
+            self.env.user._orc_gateway_identity(),
+        )
+        self.user.invalidate_recordset()
+        self.assertTrue(self.user.orc_read_only)
+
+    def test_a_refused_write_through_rolls_the_local_value_back(self):
+        """AI Workplace refuses (not an org admin there / unreachable).
+
+        The local value must NOT move — otherwise Odoo shows a posture the
+        platform never accepted, and the next cron tick silently reverts it.
+        """
+        def refuse(**kw):
+            raise UserError("Only an admin of this key's organization may do that")
+
+        with patch_orc_client(self.env, set_read_only=refuse):
+            with self.assertRaises(UserError):
+                self.user.orc_read_only = True
+
+        self.user.invalidate_recordset()
+        self.assertFalse(self.user.orc_read_only)
+
+    def test_writing_the_unchanged_value_makes_no_call(self):
+        """A bulk write that merely restates the current value is free."""
+        calls = []
+        with patch_orc_client(
+            self.env,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.write({"orc_read_only": False, "name": "Alice Renamed"})
+        self.assertEqual(calls, [])
+
+    def test_enabling_and_setting_read_only_in_one_save_works(self):
+        """The ordering fix.
+
+        Ticking access + read-only together is an ordinary save. The target
+        has no credential until the enable cascade provisions it, so pushing
+        the posture BEFORE that would make AI Workplace 404 and abort the
+        whole save — the user could never be enabled this way at all. The
+        push must land after provisioning.
+        """
+        fresh = self.env["res.users"].create({
+            "name": "Bob Example",
+            "login": "bob@acme.test",
+        })
+        order = []
+
+        def provision(**kw):
+            order.append("provision")
+            return "orc-uid-2"
+
+        def push(**kw):
+            order.append("set_read_only")
+
+        with patch_orc_client(
+            self.env,
+            provision_user=provision,
+            push_odoo_key=lambda **kw: None,
+            set_read_only=push,
+        ):
+            fresh.write({"orc_enabled": True, "orc_read_only": True})
+
+        self.assertIn("set_read_only", order, "the posture was never pushed")
+        self.assertLess(
+            order.index("provision"),
+            order.index("set_read_only"),
+            "the push must run AFTER provisioning, or the credential is absent",
+        )
+        fresh.invalidate_recordset()
+        self.assertTrue(fresh.orc_read_only)
+
+    def test_disabling_in_the_same_save_pushes_nothing(self):
+        """No access, no posture — and the credential is being revoked."""
+        calls = []
+        with patch_orc_client(
+            self.env,
+            revoke_infra_access=lambda **kw: None,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.write({"orc_enabled": False, "orc_read_only": True})
+        self.assertEqual(calls, [])
+
+    def test_setting_it_on_a_disabled_user_pushes_nothing(self):
+        with patch_orc_client(self.env, revoke_infra_access=lambda **kw: None):
+            self.user.orc_enabled = False
+        calls = []
+        with patch_orc_client(
+            self.env,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.orc_read_only = True
+        self.assertEqual(calls, [], "a user with no access has no posture to set")
+
+    def test_create_with_read_only_but_no_access_is_dropped_not_stored(self):
+        """`create()` bypasses `write()`.
+
+        Storing the flag without pushing would leave Odoo asserting a
+        posture AI Workplace never heard of, which the next mirror refresh
+        would silently revert.
+        """
+        calls = []
+        with patch_orc_client(
+            self.env,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            created = self.env["res.users"].create({
+                "name": "Carol Example",
+                "login": "carol@acme.test",
+                "orc_read_only": True,
+            })
+        self.assertEqual(calls, [], "nothing to push for an unprovisioned user")
+        self.assertFalse(
+            created.orc_read_only,
+            "must not store a posture that was never applied remotely",
+        )
+
+    def test_create_with_access_does_not_push_because_create_never_provisions(self):
+        """`create()` runs no enable cascade — only `write()` does.
+
+        So even `orc_enabled=True` is honoured eventually (reconcile's
+        Direction A, next tick), and at creation time there is no credential
+        to author against no matter what the flags say. The posture request
+        must therefore be dropped AND not stored: a stored-but-unpushed value
+        would read as applied and then be silently reverted by the mirror.
+        """
+        calls = []
+        with patch_orc_client(
+            self.env,
+            provision_user=lambda **kw: "orc-uid-3",
+            push_odoo_key=lambda **kw: None,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            created = self.env["res.users"].create({
+                "name": "Dave Example",
+                "login": "dave@acme.test",
+                "orc_enabled": True,
+                "orc_read_only": True,
+            })
+        self.assertEqual(calls, [], "no credential exists at create time")
+        created.invalidate_recordset()
+        self.assertFalse(
+            created.orc_read_only,
+            "must not store a posture that was never applied remotely",
+        )
+
+    def test_a_suppressed_push_does_not_store_the_value_either(self):
+        """The invariant behind two of the review findings.
+
+        Setting the flag on a DISABLED user is suppressed outbound — but if
+        the value were still stored, Odoo would show "read-only" beside a
+        credential that stays writable, and a later enable would not re-push
+        it (that write carries no `orc_read_only` at all). It would simply
+        look correct until the mirror quietly reverted it.
+        """
+        with patch_orc_client(self.env, revoke_infra_access=lambda **kw: None):
+            self.user.orc_enabled = False
+
+        calls = []
+        with patch_orc_client(
+            self.env,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.write({"orc_read_only": True})
+
+        self.assertEqual(calls, [], "no push for a user without access")
+        self.user.invalidate_recordset()
+        self.assertFalse(
+            self.user.orc_read_only,
+            "suppressing the push must also suppress the local store",
+        )
+
+    def test_a_rename_forced_off_does_not_push_for_the_revoked_identity(self):
+        """The login guard forces `orc_enabled` off and deprovisions.
+
+        Eligibility is therefore decided AFTER that guard: a write carrying
+        `login` + `orc_read_only` (and no explicit `orc_enabled`) must not
+        post a posture for the credential the rename just revoked.
+        """
+        calls = []
+        with patch_orc_client(
+            self.env,
+            revoke_infra_access=lambda **kw: None,
+            set_read_only=lambda **kw: calls.append(kw),
+        ):
+            self.user.write({
+                "login": "alice.renamed@acme.test",
+                "orc_read_only": True,
+            })
+
+        self.assertEqual(calls, [], "the renamed identity was just revoked")
+        self.user.invalidate_recordset()
+        self.assertFalse(self.user.orc_enabled, "rename forces access off")
+        self.assertFalse(self.user.orc_read_only)
+
+    def test_failed_posture_push_undoes_a_fresh_provision(self):
+        """The compensation path — the sharpest failure in this feature.
+
+        `action_orc_provision` grants remote access and commits the Odoo API
+        key in its own cursor, so neither is undone by the rollback that a
+        failing posture push triggers. Without compensation the admin's
+        failed save would leave live READ-WRITE access — the very thing they
+        were restricting — and reconcile could not clean it up, because the
+        rollback discards the `orc_user_id` breadcrumb Direction B keys off.
+
+        The realistic trigger is not exotic: an Odoo admin who is not an
+        organization admin in AI Workplace gets 403 on the push.
+        """
+        fresh = self.env["res.users"].create({
+            "name": "Erin Example",
+            "login": "erin@acme.test",
+        })
+        revoked = []
+
+        def refuse_push(**kw):
+            raise UserError("Only an admin of this key's organization may do that")
+
+        with patch_orc_client(
+            self.env,
+            provision_user=lambda **kw: "orc-uid-4",
+            push_odoo_key=lambda **kw: None,
+            set_read_only=refuse_push,
+            revoke_infra_access=lambda **kw: revoked.append(kw),
+        ):
+            with self.assertRaises(UserError):
+                fresh.write({"orc_enabled": True, "orc_read_only": True})
+
+        self.assertEqual(
+            len(revoked), 1,
+            "a fresh provision must be revoked when the posture push fails",
+        )
+        # And the Odoo key must be revoked DURABLY. `action_orc_deprovision`
+        # unlinks it in this transaction, which the raise rolls back, so the
+        # separately-committed row would otherwise survive unreferenced.
+        self.assertFalse(
+            fresh._orc_key_exists(fresh.orc_api_key_ref),
+            "the committed API key must not survive the compensation",
+        )
+
+    def test_failed_posture_push_does_not_revoke_an_existing_enrolment(self):
+        """Only THIS write's provisioning is undone.
+
+        An already-enrolled user's access is not ours to revoke over a failed
+        posture change — that would turn a refused restriction into an
+        outage.
+        """
+        revoked = []
+
+        def refuse_push(**kw):
+            raise UserError("nope")
+
+        with patch_orc_client(
+            self.env,
+            set_read_only=refuse_push,
+            revoke_infra_access=lambda **kw: revoked.append(kw),
+        ):
+            with self.assertRaises(UserError):
+                self.user.orc_read_only = True
+
+        self.assertEqual(revoked, [], "must not revoke a pre-existing enrolment")
+

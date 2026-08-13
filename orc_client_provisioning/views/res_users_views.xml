@@ -24,13 +24,16 @@
                         <!-- Sits with the access toggle, not with the sync
                              metadata below: "may the AI write here?" is the
                              question an admin is asking when they open this
-                             tab. Mirror of the dashboard's per-key flag —
-                             always readonly, changed there, and only as
-                             fresh as 'Last synced at' immediately below. -->
+                             tab. Editable, but write-through: ticking it
+                             applies the change in AI Workplace under the
+                             acting admin's own permissions and rolls the save
+                             back if refused. Deliberately NOT gated on a
+                             local group — Odoo cannot know who holds the
+                             platform permission, so the honest UI offers the
+                             control and surfaces the refusal. -->
                         <field
                             name="orc_read_only"
-                            readonly="1"
-                            invisible="not orc_enabled"
+                            invisible="not orc_enabled or not id"
                         />
                         <field name="orc_last_sync_at" readonly="1" invisible="not orc_enabled"/>
                         <field

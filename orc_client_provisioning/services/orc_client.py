@@ -191,6 +191,34 @@ class OrcClientConfig(models.AbstractModel):
         )
 
     @api.model
+    def set_read_only(self, *, email: str, read_only: bool, acting_user: str) -> dict:
+        """Set a user's read-only posture in AI Workplace.
+
+        The ONLY outbound carrier of this flag, and it fires only from an
+        explicit user action on the form — never from the reconcile or
+        provision payloads. That distinction is the whole design: AI
+        Workplace stays the single source of truth, Odoo keeps a pull-only
+        cache, and nothing periodically re-asserts a local copy (which is
+        what used to clobber dashboard-set state).
+
+        ``acting_user`` is the ADMIN performing the change; AI Workplace
+        resolves it to a real user and evaluates that human's permission,
+        so this is not a machine acting with borrowed authority. It must be
+        a gateway identity the dashboard already knows — pass
+        ``_orc_gateway_identity()``, the same derivation the other calls
+        use. An admin who is not provisioned there (or who lacks the
+        org-admin permission) gets a 401/403, which surfaces to the user.
+
+        ``email`` is the TARGET's gateway identity, same derivation.
+        """
+        return self._request(
+            "POST",
+            "/api/addon/user-access",
+            acting_user=acting_user,
+            json_body={"target_user": email, "read_only": bool(read_only)},
+        )
+
+    @api.model
     def revoke_infra_access(self, *, email: str) -> None:
         """Revoke this user's access on THIS Odoo instance only.
 
@@ -270,7 +298,9 @@ class OrcClientConfig(models.AbstractModel):
         **optional** — a gateway older than this field simply omits it.
         Consumers must treat "absent" as unknown and preserve whatever
         they hold rather than defaulting to False; see
-        ``res.users._orc_mirror_read_only``. It is read-only here in both
-        senses: display-only in Odoo, and never sent back.
+        ``res.users._orc_mirror_read_only``. THIS response is pull-only —
+        nothing derived from it is ever sent back through the reconcile or
+        provision payloads. Authoring a change is a separate, explicit call
+        (``set_read_only``) made only on user action.
         """
         return self._request("GET", "/api/addon/infrastructure-users")
