@@ -105,6 +105,37 @@ class ResUsers(models.Model):
         readonly=True,
         copy=False,
     )
+    # AI Workplace is the sole authority for this flag; this column is a
+    # CACHE, not a second source of truth. Two rules keep it that way:
+    #
+    #   - Refresh is PULL-only. `_cron_orc_reconcile` copies the remote
+    #     value in; nothing ever re-asserts the local one outbound. That
+    #     periodic re-assertion is what used to clobber dashboard-set
+    #     state, and it is the reason the old Odoo-side read-only gate was
+    #     removed in 18.0.1.6.0.
+    #   - Writes are WRITE-THROUGH. Editing the field calls AI Workplace
+    #     first (as the acting admin, whose own permission is evaluated
+    #     there) and only persists locally once that succeeds — see
+    #     `write()`. A failure raises, so the form rolls back rather than
+    #     leaving Odoo claiming a posture the platform never accepted.
+    #
+    # So the value is editable here, but Odoo never *decides* it. Only as
+    # fresh as `orc_last_sync_at` between ticks. Note enforcement itself
+    # trails a flip by up to the platform's credential-cache TTL (~60s),
+    # exactly as it does when flipped from the dashboard.
+    orc_read_only = fields.Boolean(
+        string="AI tools are read-only",
+        copy=False,
+        help=(
+            "Whether this user's AI tools may only READ from Odoo. Changing it "
+            "here applies the change in AI Workplace immediately, under your "
+            "own permissions — you must be an organization admin there, and "
+            "the change is refused if you are not. AI Workplace remains the "
+            "source of truth; this field reflects its state as of 'Last "
+            "synced at'. It can take about a minute for a running agent to "
+            "pick up the change."
+        ),
+    )
     orc_gateway_email = fields.Char(
         string="Gateway email",
         readonly=True,
@@ -337,6 +368,34 @@ class ResUsers(models.Model):
             "orc_last_sync_message": (message or "")[:240],
         })
 
+    def _orc_mirror_read_only(self, remote):
+        """Mirror AI Workplace's read-only posture onto this user.
+
+        `remote` is one entry of the `/api/addon/infrastructure-users`
+        response. This is the PULL direction and stays one-directional: the
+        refresh never posts anything back. Authoring is a separate path
+        (`write()` → `_orc_push_read_only`), reached only by user action.
+
+        An older gateway omits `read_only` entirely. Treat a missing key
+        as "unknown" and leave the stored value alone rather than writing
+        False — writing would claim the user has write access, which is
+        the wrong way to be wrong, and would flap the field on every tick
+        against a gateway that hasn't shipped the field yet.
+        """
+        if not isinstance(remote, dict) or "read_only" not in remote:
+            return False
+        value = bool(remote.get("read_only"))
+        if self.orc_read_only == value:
+            return False
+        # `orc_readonly_internal` marks this as the PULL direction. Without
+        # it, `write()` below would call AI Workplace right back — turning
+        # the refresh into a re-assertion and rebuilding the clobber loop
+        # this whole design exists to avoid, one hop further out.
+        self.sudo().with_context(orc_readonly_internal=True).write(
+            {"orc_read_only": value}
+        )
+        return True
+
     def action_orc_provision(self):
         """Provision / re-provision this user in AI Workplace.
 
@@ -458,10 +517,19 @@ class ResUsers(models.Model):
                 raise
 
             user._orc_revoke_key(user.orc_api_key_ref)
-            user.sudo().write({
+            # Same internal marker as the mirror refresh: clearing a cache
+            # entry for a user who no longer has access is bookkeeping, and
+            # must not post a posture change for a credential we just
+            # revoked (AI Workplace would 404 the target, or worse succeed
+            # against a re-provisioned one).
+            user.sudo().with_context(orc_readonly_internal=True).write({
                 "orc_enabled": False,
                 "orc_api_key_ref": 0,
                 "orc_last_rotation_at": False,
+                # Not a breadcrumb — a posture only means something while
+                # access exists. Leaving it set would show "read-only" next
+                # to a user who has no AI access at all.
+                "orc_read_only": False,
                 # orc_user_id + orc_provisioned_at kept as breadcrumbs;
                 # re-ticking replays provisioning against the same AI Workplace
                 # identity (provision_user is idempotent on the AI Workplace
@@ -481,6 +549,90 @@ class ResUsers(models.Model):
     # recurse forever. Anything tagged with this context bypasses the
     # provisioning logic and just persists the row.
     _ORC_INFLIGHT_CTX = "orc_provisioning_inflight"
+
+    def _orc_push_read_only(self, value):
+        """Apply a read-only flip in AI Workplace, as the acting admin.
+
+        Called from `write()` BEFORE the local value is stored, so a
+        refusal (not an org admin there, unreachable, unknown target)
+        raises and the whole save rolls back. Odoo must never end up
+        claiming a posture the platform did not accept.
+
+        The acting identity is `_orc_gateway_identity()` of the CURRENT
+        user — the same derivation every other user-scoped call uses, and
+        the only string guaranteed to match whichever shape AI Workplace
+        already stores for them. A consequence worth knowing: the admin
+        doing this must themselves be provisioned there; a purely local
+        Odoo admin is refused, which is correct — the permission lives in
+        AI Workplace, not in Odoo's groups.
+        """
+        client = self.env["orc.client"]
+        acting = self.env.user._orc_gateway_identity()
+        for user in self:
+            client.set_read_only(
+                email=user._orc_gateway_identity(),
+                read_only=value,
+                acting_user=acting,
+            )
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """Creation does not pass through `write()`.
+
+        So a posture requested at creation would be stored locally and never
+        sent — and then silently reverted by the next mirror refresh, which
+        is the worst of both worlds. Strip it, create, and re-apply it
+        through the ordinary intent path once the user actually holds a
+        credential.
+
+        Note `create()` does not provision either — only `write()` runs the
+        enable cascade — so even `orc_enabled=True` at creation is honoured
+        eventually rather than immediately (reconcile's Direction A picks it
+        up on the next hourly tick). There is therefore no credential to
+        author a posture against at this point, whatever the flags say, and
+        the request is dropped rather than stored: storing it would leave
+        Odoo claiming a posture AI Workplace never heard of, which the mirror
+        refresh would then silently revert.
+
+        Dropped rather than raised, because failing the creation of an Odoo
+        user over this would be disproportionate. The form also hides the
+        control on an unsaved record, so this path is reached mainly by
+        scripted / XML-RPC creates, where the log line is the signal.
+        """
+        wanted = [bool(v.get("orc_read_only")) for v in vals_list]
+        if any(wanted):
+            vals_list = [
+                {k: val for k, val in v.items() if k != "orc_read_only"}
+                for v in vals_list
+            ]
+        users = super().create(vals_list)
+        for user, want in zip(users, wanted):
+            if not want:
+                continue
+            if user.orc_enabled and user.orc_api_key_ref:
+                user.write({"orc_read_only": True})
+            else:
+                _logger.info(
+                    "[orc] ignoring orc_read_only=True at creation for %s: "
+                    "no AI Workplace credential yet — set it once access is "
+                    "enabled",
+                    user.login,
+                )
+        return users
+
+    def _orc_apply_pushed_read_only(self, records, value):
+        """Push a posture, then cache it — in that order, or not at all.
+
+        Storing before (or without) a successful push is what would let Odoo
+        claim a posture AI Workplace never accepted. A raise from the push
+        propagates, rolling the whole save back.
+        """
+        if not records:
+            return
+        records._orc_push_read_only(value)
+        records.sudo().with_context(orc_readonly_internal=True).write(
+            {"orc_read_only": value}
+        )
 
     def write(self, vals):
         # Plan §9.3 server-side guard: a write that changes `login`
@@ -509,11 +661,59 @@ class ResUsers(models.Model):
                     forced_off = True
                     break
 
+        # Write-through for the read-only posture.
+        #
+        # Decided HERE — after the login guard, which may have just forced
+        # `orc_enabled` off (a rename deprovisions, so a posture pushed for
+        # that identity would target a credential being revoked) — and
+        # PERFORMED after the enable/disable cascade below, once the
+        # credential a push needs actually exists. Ticking access and
+        # read-only in one save is an ordinary thing to do, and pushing
+        # first would make AI Workplace answer 404 and abort the save.
+        #
+        # The value is REMOVED from `vals`, so `super().write()` never
+        # stores it. Odoo must never hold a posture that was not applied
+        # remotely: storing one for a user we decline to push for (disabled,
+        # or being disabled) would show "read-only" next to a credential
+        # that is still writable, and the next enable would not re-push it —
+        # it would just look correct until the mirror refresh quietly
+        # reverted it. So the local write happens only after a successful
+        # push, through the internal (pull-direction) path.
+        #
+        # Selection must happen before `super().write()`: afterwards every
+        # record would already equal the target and "actually changing"
+        # would match nothing.
+        #
+        # Skipped when `orc_readonly_internal` (the pull direction: mirror
+        # refresh and deprovision clear) or when inside the cascade's own
+        # in-flight writes.
+        #
+        # On a multi-record write the platform applies each user in turn; if
+        # one fails, Odoo rolls back locally while the earlier ones stand.
+        # That is the safe direction — the cache diverges for at most one
+        # cron tick, then converges TOWARD AI Workplace, the authority. No
+        # compensation logic, on purpose.
+        push_target = None
+        push_records = self.browse()
+        if (
+            "orc_read_only" in vals
+            and not self.env.context.get("orc_readonly_internal")
+            and not self.env.context.get(self._ORC_INFLIGHT_CTX)
+        ):
+            push_target = bool(vals["orc_read_only"])
+            push_records = self.filtered(
+                lambda u: u.orc_read_only != push_target
+                and vals.get("orc_enabled", u.orc_enabled)
+            )
+            vals = {k: v for k, v in vals.items() if k != "orc_read_only"}
+
         if (
             "orc_enabled" not in vals
             or self.env.context.get(self._ORC_INFLIGHT_CTX)
         ):
-            return super().write(vals)
+            res = super().write(vals)
+            self._orc_apply_pushed_read_only(push_records, push_target)
+            return res
 
         flip_to = vals["orc_enabled"]
         # Mark the cascade so action_orc_provision / action_orc_deprovision's
@@ -522,6 +722,9 @@ class ResUsers(models.Model):
         # this hook.
         self_inflight = self.with_context(**{self._ORC_INFLIGHT_CTX: True})
         res = super(ResUsers, self_inflight).write(vals)
+        # Users this write provisions from scratch. Needed to undo the grant
+        # if the posture push below fails — see the handler there.
+        provisioned_now = []
         for user in self_inflight:
             # Re-provision fires when `orc_enabled` flips true AND
             # there's no live AI Workplace-managed API key — covers both the
@@ -531,6 +734,7 @@ class ResUsers(models.Model):
             # on deprovision).
             if flip_to and not user.orc_api_key_ref:
                 user.action_orc_provision()
+                provisioned_now.append(user)
                 user._orc_stamp_sync("ok", "provisioned on save")
             elif not flip_to and user.orc_user_id:
                 if not forced_off:
@@ -560,6 +764,45 @@ class ResUsers(models.Model):
                     user._orc_stamp_sync(
                         "error", f"login changed; deprovision failed: {exc}",
                     )
+        # After provisioning: the credential the push needs now exists.
+        try:
+            self._orc_apply_pushed_read_only(push_records, push_target)
+        except Exception:
+            # Compensate. Provisioning has already granted remote access and
+            # committed the Odoo API key in its OWN cursor (see
+            # `_orc_generate_api_key`), so neither is undone by the rollback
+            # this raise is about to trigger. That would leave live access
+            # the admin's failed save says was never granted — and leave it
+            # READ-WRITE, the precise thing they were trying to restrict.
+            #
+            # Reconcile cannot mop it up either: the rollback discards the
+            # `orc_user_id` breadcrumb that Direction B (local disabled +
+            # orc_user_id set → revoke) keys off, so the remote identity
+            # reads as an unreferenced orphan and survives until key
+            # expiry.
+            #
+            # Only users provisioned by THIS write are undone — an
+            # already-enrolled user's access is not ours to revoke over a
+            # failed posture change. Revoke failures are logged, not raised:
+            # the original error is the one the admin needs to see.
+            for user in provisioned_now:
+                # Capture the key id first: `action_orc_deprovision` clears
+                # `orc_api_key_ref`, and we need it after.
+                key_ref = user.orc_api_key_ref
+                try:
+                    user.action_orc_deprovision()
+                except Exception as exc:
+                    _logger.warning(
+                        "[orc] could not undo provisioning for %s after a failed "
+                        "posture update: %s", user.login, exc,
+                    )
+                # `action_orc_deprovision`'s own key unlink runs in THIS
+                # transaction, so the raise below would roll it back and leave
+                # the separately-committed key row alive and unreferenced. Redo
+                # it in its own cursor — the `commit=True` branch exists for
+                # this exact path, and says so.
+                user._orc_revoke_key(key_ref, commit=True)
+            raise
         return res
 
     # --- Crons -----------------------------------------------------------------
@@ -669,6 +912,12 @@ class ResUsers(models.Model):
                 # calls (revoke, SSO, tasks) use the stable stored value.
                 if not user.orc_gateway_email:
                     user.sudo().write({"orc_gateway_email": email})
+                # Refresh the read-only mirror while we hold a definitive
+                # remote answer. Done before the key-validity branch below
+                # so it lands on the healed path too — that branch
+                # re-provisions and `continue`s, and the posture we just
+                # read is still the truth either way.
+                user._orc_mirror_read_only(remote_users[email])
                 # Validity guard: AI Workplace holding a key ROW is NOT proof
                 # the key works. If our local ownership pointer is lost
                 # (orc_api_key_ref empty, or dangling to a GC'd row), the key AI
