@@ -43,6 +43,35 @@ path:
   ``.odoo.com`` host, and the agent re-verifies ``git rev-parse
   HEAD`` on the dev server before acting on the reported
   ``ssh_target``.
+
+Why the DB reads happen in the hook, not in the thread
+------------------------------------------------------
+
+The POST runs in a daemon thread so that a slow or unreachable
+webhook cannot hold up startup. That thread must not touch the
+database *before* the POST, because of how Odoo shuts down.
+
+``ThreadedServer.run()`` calls ``preload_registries()`` — which is
+where ``_register_hook``, and therefore this thread's ``start()``,
+happen — and then, when ``--stop-after-init`` is set, ``self.stop()``
+immediately. ``stop()`` joins only **non-daemon** threads before
+calling ``sql_db.close_all()``, so a pooled connection this thread
+has just checked out gets closed underneath it mid-query.
+``sql_db.execute`` logs that at ERROR *before* re-raising, one frame
+below this addon's ``try/except`` — the ERROR therefore cannot be
+suppressed here, and Odoo.sh reds the whole build over it even though
+the build itself succeeded.
+
+Two things close that window:
+
+1. ``_skip_reason`` refuses to run under ``--stop-after-init`` at all.
+   Nothing is lost: on Odoo.sh the serving process starts moments
+   later and runs ``_register_hook`` again with no shutdown race —
+   that is where every successful report has always come from anyway.
+2. ``_read_config`` reads both ICP values on the caller's own cursor
+   (the loading transaction's) and passes them into the thread, so
+   the thread opens no connection of its own until after the POST has
+   succeeded.
 """
 import logging
 import os
@@ -224,11 +253,58 @@ def _resolve_webhook_base(env):
     return icp_value or (WEBHOOK_BASE or "").strip() or None
 
 
-def _run_reporter(dbname):
-    """The whole thing is wrapped in a try/except that never re-raises.
-    A failure here must never block Odoo startup."""
+_SKIP_TEST_MODE = "test mode"
+_SKIP_STOP_AFTER_INIT = (
+    "--stop-after-init is set, so this process exits as soon as the "
+    "registry is loaded and ThreadedServer.stop() closes the connection "
+    "pool without waiting for daemon threads; the serving process that "
+    "starts next reports instead"
+)
+
+
+def _skip_reason():
+    """Why the reporter must not run in this process, or None to proceed.
+
+    ``--stop-after-init`` is Odoo.sh's build phase (and any local
+    ``-u``/``-i`` run). Reporting from there is not merely unnecessary,
+    it is harmful — see the module docstring.
+    """
+    if config.get("test_enable") or config.get("test_file"):
+        return _SKIP_TEST_MODE
+    if config.get("stop_after_init"):
+        return _SKIP_STOP_AFTER_INIT
+    return None
+
+
+def _read_config(env):
+    """Read the two ICP values the reporter needs, on `env`'s cursor.
+
+    Called from ``_register_hook`` so that the reporter thread never has
+    to open a connection of its own before the POST. Returns
+    ``(webhook_base, last_report_key)``; either may be None.
+    """
+    ICP = env["ir.config_parameter"].sudo()
+    return (
+        _resolve_webhook_base(env),
+        ICP.get_param(_PARAM_LAST_REPORT) or None,
+    )
+
+
+def _run_reporter(dbname, webhook_base, last_key):
+    """Derive this build's tuple, POST it, then stamp the debounce key.
+
+    Runs in a daemon thread. ``webhook_base`` and ``last_key`` come from
+    ``_read_config`` on the caller's cursor, precisely so that nothing
+    here touches the database until the POST has succeeded.
+
+    The whole thing is wrapped in a try/except that never re-raises.
+    A failure here must never block Odoo startup.
+    """
     try:
-        if config.get("test_enable") or config.get("test_file"):
+        # Belt-and-braces: `_register_hook` already refuses to spawn this
+        # thread under these conditions. Repeated here so a direct call
+        # (tests, `odoo shell`) obeys them too.
+        if _skip_reason():
             return
 
         _logger.info("[orc_build_reporter] hook fired (dbname=%s)", dbname)
@@ -279,33 +355,32 @@ def _run_reporter(dbname):
         # --- 3. Stage detection ------------------------------------------
         stage = get_stage()
 
-        # --- 4. Config + debounce check ----------------------------------
-        with Registry(dbname).cursor() as cr:
-            env = api.Environment(cr, SUPERUSER_ID, {})
-            webhook_base = _resolve_webhook_base(env)
-            if not webhook_base:
-                _logger.warning(
-                    "[orc_build_reporter] missing webhook base: set "
-                    "WEBHOOK_BASE in build_reporter.py (or the ICP key "
-                    "for one-off testing)",
-                )
-                return
+        # --- 4. Config + debounce check (no DB access) -------------------
+        # Both values were read by the caller on the loading
+        # transaction's own cursor; comparing them in memory keeps this
+        # thread off the connection pool until the POST has succeeded.
+        if not webhook_base:
+            _logger.warning(
+                "[orc_build_reporter] missing webhook base: set "
+                "WEBHOOK_BASE in build_reporter.py (or the ICP key "
+                "for one-off testing)",
+            )
+            return
 
-            ICP = env["ir.config_parameter"].sudo()
-            # Debounce key spans every field that — when changed —
-            # legitimately re-warrants a report: sha, build_id, stage.
-            current_key = f"{sha}:{build_id}:{stage}"
-            if ICP.get_param(_PARAM_LAST_REPORT) == current_key:
-                _logger.info(
-                    "[orc_build_reporter] skip: %s already reported "
-                    "(clear ICP %s to force re-post)",
-                    current_key, _PARAM_LAST_REPORT,
-                )
-                return
-            # The debounce key is stamped only after the POST succeeds
-            # (step 6). Stamping here would commit on cursor exit before
-            # the webhook call, so a timeout/non-2xx would permanently
-            # suppress the retry-on-next-restart path.
+        # Debounce key spans every field that — when changed —
+        # legitimately re-warrants a report: sha, build_id, stage.
+        current_key = f"{sha}:{build_id}:{stage}"
+        if last_key == current_key:
+            _logger.info(
+                "[orc_build_reporter] skip: %s already reported "
+                "(clear ICP %s to force re-post)",
+                current_key, _PARAM_LAST_REPORT,
+            )
+            return
+        # The debounce key is stamped only after the POST succeeds
+        # (step 6). Stamping before the webhook call would let a
+        # timeout/non-2xx permanently suppress the
+        # retry-on-next-restart path.
 
         # --- 5. POST -----------------------------------------------------
         url = f"{webhook_base.rstrip('/')}/{sha}"
@@ -349,9 +424,31 @@ class IrModuleModule(models.Model):
     @api.model
     def _register_hook(self):
         super()._register_hook()
-        threading.Thread(
-            target=_run_reporter,
-            args=(self.env.cr.dbname,),
-            daemon=True,
-            name="orc_client_build_reporter",
-        ).start()
+        # This runs inside the module-loading transaction (loading.py
+        # STEP 9), so an exception escaping here aborts the registry
+        # load. Reporting is best-effort and must never do that.
+        try:
+            reason = _skip_reason()
+            if reason:
+                # Test mode stays silent — it would fire on every CI run.
+                # The build-phase skip is logged once so `update.log`
+                # carries evidence that the guard is in place.
+                if reason is not _SKIP_TEST_MODE:
+                    _logger.info("[orc_build_reporter] skip: %s", reason)
+                return
+            webhook_base, last_key = _read_config(self.env)
+            if not webhook_base:
+                _logger.warning(
+                    "[orc_build_reporter] missing webhook base: set "
+                    "WEBHOOK_BASE in build_reporter.py (or the ICP key "
+                    "for one-off testing)",
+                )
+                return
+            threading.Thread(
+                target=_run_reporter,
+                args=(self.env.cr.dbname, webhook_base, last_key),
+                daemon=True,
+                name="orc_client_build_reporter",
+            ).start()
+        except Exception as e:
+            _logger.warning("[orc_build_reporter] hook failed: %s", e)

@@ -4,6 +4,13 @@
 
 Inherits ``TransactionCase`` because the reporter reads/writes
 ``ir.config_parameter`` and we want a savepoint around each test.
+
+``_run_reporter`` no longer reads its own config — ``_register_hook``
+does that on the loading transaction's cursor and hands the values in,
+so the thread stays off the connection pool until after the POST (see
+the module docstring). ``self._run()`` below mirrors that split: it
+calls ``_read_config`` first, exactly like the hook does, so the
+ICP-driven tests keep exercising the real resolution path.
 """
 import os
 from unittest import mock
@@ -95,6 +102,19 @@ class TestRunReporter(TransactionCase):
             p.start()
         self.addCleanup(self._stop_all, patches)
 
+    def _run(self, dbname=None, **overrides):
+        """Drive one reporter run the way `_register_hook` does.
+
+        Re-reading the ICP on every call is not incidental — it is what
+        the hook does on every registry load, and it is what makes a
+        stamped debounce key visible to the next run.
+        """
+        self.env.invalidate_all()
+        webhook_base, last_key = reporter._read_config(self.env)
+        webhook_base = overrides.get("webhook_base", webhook_base)
+        last_key = overrides.get("last_key", last_key)
+        reporter._run_reporter(dbname or self.DBNAME, webhook_base, last_key)
+
     @staticmethod
     def _stop_all(patches):
         for p in patches:
@@ -115,7 +135,7 @@ class TestRunReporter(TransactionCase):
         with mock.patch.object(
             reporter.requests, "post", return_value=self._fake_response(),
         ) as m_post:
-            reporter._run_reporter(self.DBNAME)
+            self._run()
 
         m_post.assert_called_once()
         args, kwargs = m_post.call_args
@@ -155,7 +175,7 @@ class TestRunReporter(TransactionCase):
         with mock.patch.object(
             reporter.requests, "post", return_value=self._fake_response(),
         ) as m_post:
-            reporter._run_reporter(self.DBNAME)
+            self._run()
 
         body = m_post.call_args.kwargs["json"]
         self.assertEqual(body["build_id"], "32258372")
@@ -169,42 +189,45 @@ class TestRunReporter(TransactionCase):
 
     # --- Skip conditions ---------------------------------------------------
 
-    def _run_and_assert_no_post(self, dbname, patches):
+    def _run_and_assert_no_post(self, patches, dbname=None, **overrides):
         self._start(patches)
         with mock.patch.object(reporter.requests, "post") as m_post:
-            reporter._run_reporter(dbname)
+            self._run(dbname, **overrides)
         m_post.assert_not_called()
 
     def test_skip_when_test_enable_set(self):
         self._run_and_assert_no_post(
-            self.DBNAME,
             self._stack_patches(config_overrides={"test_enable": True}),
         )
 
     def test_skip_when_test_file_set(self):
         self._run_and_assert_no_post(
-            self.DBNAME,
             self._stack_patches(config_overrides={"test_file": "x.py"}),
         )
 
+    def test_skip_when_stop_after_init_set(self):
+        """The build-phase guard. `--stop-after-init` means the process
+        exits the moment the registry is loaded, taking the connection
+        pool with it — a report attempted from there can only lose the
+        race, sometimes loudly enough to red the whole build."""
+        self._run_and_assert_no_post(
+            self._stack_patches(config_overrides={"stop_after_init": True}),
+        )
+
     def test_skip_when_dbname_has_no_build_id(self):
-        self._run_and_assert_no_post("local-dev", self._stack_patches())
+        self._run_and_assert_no_post(self._stack_patches(), dbname="local-dev")
 
     def test_skip_when_webhook_base_missing(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, False)
         self.env.invalidate_all()
         with mock.patch.object(reporter, "WEBHOOK_BASE", ""):
-            self._run_and_assert_no_post(self.DBNAME, self._stack_patches())
+            self._run_and_assert_no_post(self._stack_patches())
 
     def test_skip_when_sha_unknown(self):
-        self._run_and_assert_no_post(
-            self.DBNAME, self._stack_patches(sha=None),
-        )
+        self._run_and_assert_no_post(self._stack_patches(sha=None))
 
     def test_skip_when_repo_unknown(self):
-        self._run_and_assert_no_post(
-            self.DBNAME, self._stack_patches(repo=None),
-        )
+        self._run_and_assert_no_post(self._stack_patches(repo=None))
 
     # --- Debounce ----------------------------------------------------------
 
@@ -214,7 +237,7 @@ class TestRunReporter(TransactionCase):
             f"{self.SHA}:{self.BUILD_ID}:dev",
         )
         self.env.invalidate_all()
-        self._run_and_assert_no_post(self.DBNAME, self._stack_patches())
+        self._run_and_assert_no_post(self._stack_patches())
 
     def test_same_sha_new_build_id_reposts(self):
         """A rebuild on the same commit gets a fresh build_id; the
@@ -228,7 +251,7 @@ class TestRunReporter(TransactionCase):
         with mock.patch.object(
             reporter.requests, "post", return_value=self._fake_response(),
         ) as m_post:
-            reporter._run_reporter(self.DBNAME)
+            self._run()
         m_post.assert_called_once()
 
     def test_same_sha_new_stage_reposts(self):
@@ -244,7 +267,7 @@ class TestRunReporter(TransactionCase):
         with mock.patch.object(
             reporter.requests, "post", return_value=self._fake_response(),
         ) as m_post:
-            reporter._run_reporter(self.DBNAME)
+            self._run()
         m_post.assert_called_once()
         self.assertEqual(m_post.call_args.kwargs["json"]["stage"], "staging")
 
@@ -253,8 +276,8 @@ class TestRunReporter(TransactionCase):
         with mock.patch.object(
             reporter.requests, "post", return_value=self._fake_response(),
         ) as m_post:
-            reporter._run_reporter(self.DBNAME)
-            reporter._run_reporter(self.DBNAME)
+            self._run()
+            self._run()
 
             m_post.assert_called_once()
             self.env.invalidate_all()
@@ -265,7 +288,7 @@ class TestRunReporter(TransactionCase):
 
             self.ICP.set_param(reporter._PARAM_LAST_REPORT, False)
             self.env.invalidate_all()
-            reporter._run_reporter(self.DBNAME)
+            self._run()
 
         self.assertEqual(
             m_post.call_count, 2,
@@ -280,7 +303,7 @@ class TestRunReporter(TransactionCase):
             reporter.requests, "post", side_effect=RuntimeError("kaboom"),
         ):
             try:
-                reporter._run_reporter(self.DBNAME)
+                self._run()
             except Exception as e:
                 self.fail(f"_run_reporter raised: {e!r}")
 
@@ -290,7 +313,7 @@ class TestRunReporter(TransactionCase):
             reporter, "get_commit_sha", side_effect=RuntimeError("boom"),
         ):
             try:
-                reporter._run_reporter(self.DBNAME)
+                self._run()
             except Exception as e:
                 self.fail(f"_run_reporter raised: {e!r}")
 
@@ -302,7 +325,7 @@ class TestRunReporter(TransactionCase):
         )
         with mock.patch.object(reporter.requests, "post", return_value=bad):
             try:
-                reporter._run_reporter(self.DBNAME)
+                self._run()
             except Exception as e:
                 self.fail(f"_run_reporter raised: {e!r}")
 
@@ -321,13 +344,13 @@ class TestRunReporter(TransactionCase):
             reporter.requests, "post",
             side_effect=[bad, self._fake_response()],
         ) as m_post:
-            reporter._run_reporter(self.DBNAME)   # fails → must not stamp
+            self._run()                           # fails → must not stamp
             self.env.invalidate_all()
             self.assertFalse(
                 self.ICP.get_param(reporter._PARAM_LAST_REPORT),
                 "debounce key must not be stamped after a failed POST",
             )
-            reporter._run_reporter(self.DBNAME)   # retries
+            self._run()                           # retries
 
         self.assertEqual(
             m_post.call_count, 2,
