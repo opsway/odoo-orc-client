@@ -5,12 +5,18 @@
 Inherits ``TransactionCase`` because the reporter reads/writes
 ``ir.config_parameter`` and we want a savepoint around each test.
 
-``_run_reporter`` no longer reads its own config — ``_register_hook``
-does that on the loading transaction's cursor and hands the values in,
-so the thread stays off the connection pool until after the POST (see
-the module docstring). ``self._run()`` below mirrors that split: it
-calls ``_read_config`` first, exactly like the hook does, so the
-ICP-driven tests keep exercising the real resolution path.
+``_run_reporter`` takes its webhook base from the caller — the hook
+resolves it so a process with none configured never spawns a thread.
+``self._run()`` below mirrors that, calling ``_resolve_webhook_base``
+exactly like the hook does, so the ICP-driven tests keep exercising
+the real resolution path.
+
+The claim/POST/stamp sequence runs inside one transaction guarded by a
+transaction-scoped advisory lock. `_FakeRegistry` hands back the test's
+own cursor, so real cross-connection contention is not reachable from
+`TransactionCase` — the loser branch is covered by patching
+``_try_lock`` instead. What that leaves untested is Postgres' own
+mutual exclusion, which is not ours to test.
 """
 import os
 from unittest import mock
@@ -103,17 +109,12 @@ class TestRunReporter(TransactionCase):
         self.addCleanup(self._stop_all, patches)
 
     def _run(self, dbname=None, **overrides):
-        """Drive one reporter run the way `_register_hook` does.
-
-        Re-reading the ICP on every call is not incidental — it is what
-        the hook does on every registry load, and it is what makes a
-        stamped debounce key visible to the next run.
-        """
+        """Drive one reporter run the way `_register_hook` does."""
         self.env.invalidate_all()
-        webhook_base, last_key = reporter._read_config(self.env)
-        webhook_base = overrides.get("webhook_base", webhook_base)
-        last_key = overrides.get("last_key", last_key)
-        reporter._run_reporter(dbname or self.DBNAME, webhook_base, last_key)
+        webhook_base = overrides.get(
+            "webhook_base", reporter._resolve_webhook_base(self.env),
+        )
+        reporter._run_reporter(dbname or self.DBNAME, webhook_base)
 
     @staticmethod
     def _stop_all(patches):
@@ -270,6 +271,55 @@ class TestRunReporter(TransactionCase):
             self._run()
         m_post.assert_called_once()
         self.assertEqual(m_post.call_args.kwargs["json"]["stage"], "staging")
+
+    def test_loser_of_the_lock_does_not_post(self):
+        """Two workers loading the same registry derive the same tuple.
+        Only the lock holder may POST — otherwise the stale read each of
+        them did would produce one duplicate report per worker, which is
+        the "debounce across Odoo workers" promise not being kept."""
+        self._start(self._stack_patches())
+        with mock.patch.object(reporter, "_try_lock", return_value=False), \
+                mock.patch.object(reporter.requests, "post") as m_post:
+            self._run()
+        m_post.assert_not_called()
+        self.env.invalidate_all()
+        self.assertFalse(
+            self.ICP.get_param(reporter._PARAM_LAST_REPORT),
+            "a worker that lost the lock must not stamp either",
+        )
+
+    def test_winner_of_the_lock_posts_and_stamps(self):
+        """The complement: with the lock granted, the same run posts."""
+        self._start(self._stack_patches())
+        with mock.patch.object(reporter, "_try_lock", return_value=True), \
+                mock.patch.object(
+                    reporter.requests, "post",
+                    return_value=self._fake_response(),
+                ) as m_post:
+            self._run()
+        m_post.assert_called_once()
+        self.env.invalidate_all()
+        self.assertEqual(
+            self.ICP.get_param(reporter._PARAM_LAST_REPORT),
+            f"{self.SHA}:{self.BUILD_ID}:dev",
+        )
+
+    def test_debounce_is_re_read_under_the_lock(self):
+        """The check that must not be a snapshot taken before the lock:
+        a worker queued behind the winner has to see what the winner
+        stamped, not what it read on its way in."""
+        self._start(self._stack_patches())
+        with mock.patch.object(
+            reporter.requests, "post", return_value=self._fake_response(),
+        ) as m_post:
+            self._run()
+            m_post.assert_called_once()
+            # Second worker, same tuple, lock now free again.
+            self._run()
+        self.assertEqual(
+            m_post.call_count, 1,
+            "the second worker must observe the first worker's stamp",
+        )
 
     def test_consecutive_run_skipped_unless_icp_cleared(self):
         self._start(self._stack_patches())

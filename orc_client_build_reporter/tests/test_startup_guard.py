@@ -54,9 +54,9 @@ class TestSkipReason(BaseCase):
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestReadConfig(TransactionCase):
-    """`_read_config` is what moved the pre-POST DB reads out of the
-    thread and onto the caller's cursor."""
+class TestResolveWebhookBase(TransactionCase):
+    """The hook resolves the webhook base so that a process with none
+    configured never spawns a reporter thread at all."""
 
     WEBHOOK_BASE = "https://orc.test/webhook/odoo-sh/build-ready"
 
@@ -66,30 +66,57 @@ class TestReadConfig(TransactionCase):
 
     def _read(self):
         self.env.invalidate_all()
-        return reporter._read_config(self.env)
+        return reporter._resolve_webhook_base(self.env)
 
     def test_icp_overrides_in_source_constant(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, self.WEBHOOK_BASE)
         with mock.patch.object(reporter, "WEBHOOK_BASE", "https://in-source/x"):
-            self.assertEqual(self._read()[0], self.WEBHOOK_BASE)
+            self.assertEqual(self._read(), self.WEBHOOK_BASE)
 
     def test_falls_back_to_in_source_constant(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, False)
         with mock.patch.object(reporter, "WEBHOOK_BASE", "https://in-source/x"):
-            self.assertEqual(self._read()[0], "https://in-source/x")
+            self.assertEqual(self._read(), "https://in-source/x")
 
     def test_none_when_neither_set(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, False)
         with mock.patch.object(reporter, "WEBHOOK_BASE", ""):
-            self.assertIsNone(self._read()[0])
+            self.assertIsNone(self._read())
 
-    def test_returns_stored_debounce_key(self):
-        self.ICP.set_param(reporter._PARAM_LAST_REPORT, "sha:1:dev")
-        self.assertEqual(self._read()[1], "sha:1:dev")
 
-    def test_debounce_key_none_when_unset(self):
-        self.ICP.set_param(reporter._PARAM_LAST_REPORT, False)
-        self.assertIsNone(self._read()[1])
+@tagged('post_install', '-at_install', 'orc_client_build_reporter')
+class TestDebounceReadAndLock(TransactionCase):
+    """The two primitives the cross-worker debounce is built on."""
+
+    def test_lock_is_granted_and_is_transaction_scoped(self):
+        self.assertTrue(reporter._try_lock(self.env.cr))
+        # Re-taking it on the same transaction succeeds (Postgres
+        # advisory locks are re-entrant per session), which is what lets
+        # a retry inside one run work. Cross-connection exclusion is
+        # Postgres' own guarantee and is not re-tested here.
+        self.assertTrue(reporter._try_lock(self.env.cr))
+
+    def test_last_report_key_bypasses_the_ormcache(self):
+        """`get_param` is @ormcache'd on the key, so it can serve a value
+        cached before another worker stamped a new one. The debounce read
+        must come off the transaction instead — that staleness is exactly
+        what the lock exists to eliminate."""
+        ICP = self.env["ir.config_parameter"].sudo()
+        ICP.set_param(reporter._PARAM_LAST_REPORT, "sha:1:dev")
+        self.assertEqual(reporter._last_report_key(self.env), "sha:1:dev")
+        # Write around the ORM, the way another worker's committed
+        # transaction would look to this one, and confirm the read sees
+        # it while the cached accessor does not have to.
+        self.env.cr.execute(
+            "UPDATE ir_config_parameter SET value = %s WHERE key = %s",
+            ("sha:2:dev", reporter._PARAM_LAST_REPORT),
+        )
+        self.assertEqual(reporter._last_report_key(self.env), "sha:2:dev")
+
+    def test_last_report_key_none_when_unset(self):
+        ICP = self.env["ir.config_parameter"].sudo()
+        ICP.set_param(reporter._PARAM_LAST_REPORT, False)
+        self.assertIsNone(reporter._last_report_key(self.env))
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
@@ -120,19 +147,13 @@ class TestRegisterHook(TransactionCase):
         m_thread.assert_called_once()
         m_thread.return_value.start.assert_called_once()
 
-    def test_thread_receives_config_read_on_the_hook_cursor(self):
-        """The whole point of the change: the thread is handed both ICP
-        values, so it performs no DB access before the POST."""
-        self.ICP.set_param(reporter._PARAM_LAST_REPORT, "sha:1:dev")
-        self.env.invalidate_all()
+    def test_thread_receives_the_resolved_webhook_base(self):
         m_thread = self._fire()
-        args = m_thread.call_args.kwargs["args"]
         self.assertEqual(
-            args,
+            m_thread.call_args.kwargs["args"],
             (
                 self.env.cr.dbname,
                 "https://orc.test/webhook/odoo-sh/build-ready",
-                "sha:1:dev",
             ),
         )
 
@@ -161,7 +182,8 @@ class TestRegisterHook(TransactionCase):
         genuinely broken build."""
         with mock.patch.object(reporter, "config", {}), \
                 mock.patch.object(
-                    reporter, "_read_config", side_effect=RuntimeError("boom"),
+                    reporter, "_resolve_webhook_base",
+                    side_effect=RuntimeError("boom"),
                 ):
             try:
                 self.modules._register_hook()

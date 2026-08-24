@@ -44,12 +44,12 @@ path:
   HEAD`` on the dev server before acting on the reported
   ``ssh_target``.
 
-Why the DB reads happen in the hook, not in the thread
-------------------------------------------------------
+Why the reporter does not run under ``--stop-after-init``
+---------------------------------------------------------
 
 The POST runs in a daemon thread so that a slow or unreachable
-webhook cannot hold up startup. That thread must not touch the
-database *before* the POST, because of how Odoo shuts down.
+webhook cannot hold up startup. That is safe only in a process that
+intends to keep running.
 
 ``ThreadedServer.run()`` calls ``preload_registries()`` — which is
 where ``_register_hook``, and therefore this thread's ``start()``,
@@ -62,16 +62,40 @@ below this addon's ``try/except`` — the ERROR therefore cannot be
 suppressed here, and Odoo.sh reds the whole build over it even though
 the build itself succeeded.
 
-Two things close that window:
+``_skip_reason`` therefore refuses to run under ``--stop-after-init``
+at all. Nothing is lost: on Odoo.sh the serving process starts moments
+later and runs ``_register_hook`` again with no shutdown race — that
+is where every successful report has always come from anyway.
 
-1. ``_skip_reason`` refuses to run under ``--stop-after-init`` at all.
-   Nothing is lost: on Odoo.sh the serving process starts moments
-   later and runs ``_register_hook`` again with no shutdown race —
-   that is where every successful report has always come from anyway.
-2. ``_read_config`` reads both ICP values on the caller's own cursor
-   (the loading transaction's) and passes them into the thread, so
-   the thread opens no connection of its own until after the POST has
-   succeeded.
+How the debounce holds across workers
+-------------------------------------
+
+Every worker that loads this registry runs the hook, so several
+threads can be deriving the same ``{sha, build_id, stage}`` at once.
+Reading ``last_report_key``, comparing it, and stamping it after the
+POST is a read-check-act sequence: without serialisation each worker
+reads the same stale value and each one posts, which is not the
+"debounce across Odoo workers" this addon advertises.
+
+The claim, the POST and the stamp therefore share **one transaction**,
+opened by taking a *transaction-scoped* Postgres advisory lock
+(``_try_lock``). Losers exit immediately — the winner is posting that
+exact tuple right now.
+
+Transaction scope is what makes this safe rather than merely mutually
+exclusive. A persisted "claim" row written before the POST would have
+to be cleared afterwards by code a ``SIGKILL`` never reaches, and a
+stale claim suppresses *every* future report — the permanent-
+suppression bug this addon already fixed once by moving the stamp
+after the POST. An advisory lock needs no cleanup: the commit drops
+it, any exception rolls it back, and a killed backend drops it when
+the connection dies. In each of those cases the stamp is absent too,
+so the next registry load retries.
+
+The cost is one connection idle-in-transaction for at most the POST
+timeout. It holds only the advisory lock and ``ACCESS SHARE`` on
+``ir_config_parameter``, and the ``--stop-after-init`` guard keeps it
+out of the build phase, where schema locks are held.
 """
 import logging
 import os
@@ -107,6 +131,12 @@ WEBHOOK_BASE = "https://help.opsway.com/webhook/odoo-sh/build-ready"
 
 _PARAM_WEBHOOK_BASE = "orc_client_build_reporter.webhook_base"
 _PARAM_LAST_REPORT = "orc_client_build_reporter.last_report_key"
+
+# Serialises the claim/POST/stamp sequence across the workers of one
+# database. Any stable value works as long as every worker agrees on it;
+# this one is `zlib.crc32(b"orc_client_build_reporter")`, hard-coded so
+# it cannot drift with the hash implementation.
+_ADVISORY_LOCK_KEY = 1108763547
 
 # Odoo.sh sets these env vars on every build container. We extract
 # build_id and branch_slug from ODOO_BUILD_URL when possible; fall
@@ -276,26 +306,43 @@ def _skip_reason():
     return None
 
 
-def _read_config(env):
-    """Read the two ICP values the reporter needs, on `env`'s cursor.
+def _try_lock(cr):
+    """Take the reporter's transaction-scoped advisory lock, or give up.
 
-    Called from ``_register_hook`` so that the reporter thread never has
-    to open a connection of its own before the POST. Returns
-    ``(webhook_base, last_report_key)``; either may be None.
+    Non-blocking on purpose: a worker that cannot get the lock has
+    nothing useful to wait for, because the holder is posting the very
+    tuple this worker would have posted.
+    """
+    cr.execute("SELECT pg_try_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
+    return bool(cr.fetchone()[0])
+
+
+def _last_report_key(env):
+    """Read the debounce key straight off `env`'s transaction.
+
+    Deliberately not ``ICP.get_param``: that is ``@ormcache``'d on the
+    key, so it can hand back a value this process cached before another
+    worker stamped a new one — exactly the staleness the lock exists to
+    eliminate. Flush first for the same reason core's own ``_get_param``
+    does: an uncommitted ``set_param`` in this transaction must be
+    visible to the raw SELECT.
     """
     ICP = env["ir.config_parameter"].sudo()
-    return (
-        _resolve_webhook_base(env),
-        ICP.get_param(_PARAM_LAST_REPORT) or None,
+    ICP.flush_model(["key", "value"])
+    env.cr.execute(
+        "SELECT value FROM ir_config_parameter WHERE key = %s",
+        (_PARAM_LAST_REPORT,),
     )
+    row = env.cr.fetchone()
+    return row[0] if row else None
 
 
-def _run_reporter(dbname, webhook_base, last_key):
+def _run_reporter(dbname, webhook_base):
     """Derive this build's tuple, POST it, then stamp the debounce key.
 
-    Runs in a daemon thread. ``webhook_base`` and ``last_key`` come from
-    ``_read_config`` on the caller's cursor, precisely so that nothing
-    here touches the database until the POST has succeeded.
+    Runs in a daemon thread. ``webhook_base`` comes from the caller so
+    that a process with no webhook configured never spawns the thread
+    at all.
 
     The whole thing is wrapped in a try/except that never re-raises.
     A failure here must never block Odoo startup.
@@ -355,10 +402,6 @@ def _run_reporter(dbname, webhook_base, last_key):
         # --- 3. Stage detection ------------------------------------------
         stage = get_stage()
 
-        # --- 4. Config + debounce check (no DB access) -------------------
-        # Both values were read by the caller on the loading
-        # transaction's own cursor; comparing them in memory keeps this
-        # thread off the connection pool until the POST has succeeded.
         if not webhook_base:
             _logger.warning(
                 "[orc_build_reporter] missing webhook base: set "
@@ -370,19 +413,6 @@ def _run_reporter(dbname, webhook_base, last_key):
         # Debounce key spans every field that — when changed —
         # legitimately re-warrants a report: sha, build_id, stage.
         current_key = f"{sha}:{build_id}:{stage}"
-        if last_key == current_key:
-            _logger.info(
-                "[orc_build_reporter] skip: %s already reported "
-                "(clear ICP %s to force re-post)",
-                current_key, _PARAM_LAST_REPORT,
-            )
-            return
-        # The debounce key is stamped only after the POST succeeds
-        # (step 6). Stamping before the webhook call would let a
-        # timeout/non-2xx permanently suppress the
-        # retry-on-next-restart path.
-
-        # --- 5. POST -----------------------------------------------------
         url = f"{webhook_base.rstrip('/')}/{sha}"
         body = {
             "build_url": build_url,
@@ -391,26 +421,52 @@ def _run_reporter(dbname, webhook_base, last_key):
             "branch_slug": branch_slug,
             "repo": repo,
         }
-        _logger.info(
-            "[orc_build_reporter] reporting repo=%s sha=%s build_id=%s stage=%s",
-            repo, sha[:8], build_id, stage,
-        )
-        r = requests.post(
-            url, json=body, timeout=10,
-            headers={
-                "User-Agent": "orc-client-build-reporter/1.1",
-                "Accept": "application/json",
-            },
-        )
-        r.raise_for_status()
-        _logger.info(
-            "[orc_build_reporter] reported: %s",
-            (r.text or "").strip()[:200],
-        )
 
-        # --- 6. Debounce stamp (only on confirmed success) ---------------
+        # --- 4-6. Claim, POST and stamp, in one transaction --------------
+        # See "How the debounce holds across workers" in the module
+        # docstring. Committing on clean exit publishes the stamp and
+        # drops the lock together; every failure path — exception here,
+        # or the backend dying mid-POST — rolls both back, so the next
+        # registry load retries rather than being suppressed forever.
         with Registry(dbname).cursor() as cr:
+            if not _try_lock(cr):
+                _logger.info(
+                    "[orc_build_reporter] skip: another worker is "
+                    "reporting %s right now", current_key,
+                )
+                return
+
             env = api.Environment(cr, SUPERUSER_ID, {})
+            # Re-read under the lock: a worker that queued behind the
+            # winner must see what the winner stamped.
+            if _last_report_key(env) == current_key:
+                _logger.info(
+                    "[orc_build_reporter] skip: %s already reported "
+                    "(clear ICP %s to force re-post)",
+                    current_key, _PARAM_LAST_REPORT,
+                )
+                return
+
+            _logger.info(
+                "[orc_build_reporter] reporting repo=%s sha=%s "
+                "build_id=%s stage=%s",
+                repo, sha[:8], build_id, stage,
+            )
+            r = requests.post(
+                url, json=body, timeout=10,
+                headers={
+                    "User-Agent": "orc-client-build-reporter/1.1",
+                    "Accept": "application/json",
+                },
+            )
+            r.raise_for_status()
+            _logger.info(
+                "[orc_build_reporter] reported: %s",
+                (r.text or "").strip()[:200],
+            )
+
+            # Stamped only now: before the POST it would let a
+            # timeout/non-2xx suppress the retry-on-next-restart path.
             env["ir.config_parameter"].sudo().set_param(
                 _PARAM_LAST_REPORT, current_key,
             )
@@ -436,7 +492,7 @@ class IrModuleModule(models.Model):
                 if reason is not _SKIP_TEST_MODE:
                     _logger.info("[orc_build_reporter] skip: %s", reason)
                 return
-            webhook_base, last_key = _read_config(self.env)
+            webhook_base = _resolve_webhook_base(self.env)
             if not webhook_base:
                 _logger.warning(
                     "[orc_build_reporter] missing webhook base: set "
@@ -446,7 +502,7 @@ class IrModuleModule(models.Model):
                 return
             threading.Thread(
                 target=_run_reporter,
-                args=(self.env.cr.dbname, webhook_base, last_key),
+                args=(self.env.cr.dbname, webhook_base),
                 daemon=True,
                 name="orc_client_build_reporter",
             ).start()
