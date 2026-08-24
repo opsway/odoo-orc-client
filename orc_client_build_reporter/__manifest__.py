@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Build Reporter",
-    "version": "18.0.1.2.0",
+    "version": "18.0.1.3.0",
     "summary": (
         "Phones home to AI Workplace on every Odoo.sh registry init so the"
         " developer-flow agent can resolve `(commit sha → build_id, dev"
@@ -55,14 +55,20 @@ Skip conditions
 Quiet exits (one log line at most) when:
 
 1. Odoo is in test mode (``test_enable`` / ``test_file``).
-2. No build_id derivable from ``ODOO_BUILD_URL`` or ``cr.dbname``.
-3. Current commit SHA cannot be derived from the customer project
+2. ``--stop-after-init`` is set — Odoo.sh's build phase, and any
+   local ``-u``/``-i`` run. The process tears the connection pool
+   down the instant the registry loads, without waiting for daemon
+   threads, so a report attempted there can only either lose the
+   race silently or lose it loudly enough to red the build. The
+   serving process that starts next reports instead.
+3. No build_id derivable from ``ODOO_BUILD_URL`` or ``cr.dbname``.
+4. Current commit SHA cannot be derived from the customer project
    checkout (resolved up through any submodule layer).
-4. Neither in-source constants nor ICP overrides set.
-5. The git origin URL doesn't resolve to a GitHub ``owner/repo``
+5. Neither in-source constants nor ICP overrides set.
+6. The git origin URL doesn't resolve to a GitHub ``owner/repo``
    shape (self-hosted GitLab and similar — AI Workplace only
    handles GitHub today).
-6. The current ``{sha}:{build_id}:{stage}`` triple was already
+7. The current ``{sha}:{build_id}:{stage}`` triple was already
    reported (``last_report_key`` debounce across Odoo workers).
 """,
     "author": "OpsWay",
