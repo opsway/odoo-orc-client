@@ -36,12 +36,37 @@ class ResUsers(models.Model):
         readonly=True,
         copy=False,
     )
-    orc_api_key_id = fields.Many2one(
-        "res.users.apikeys",
+    # Deliberately an Integer and NOT a Many2one onto res.users.apikeys.
+    #
+    # Two production outages came from modelling this as a relation:
+    #
+    #  1. The key is minted in a nested cursor that commits on its own (so AI
+    #     Workplace's cross-connection setup-key probe can see it — see
+    #     `_orc_generate_api_key`). Odoo runs cursors at REPEATABLE READ, so
+    #     the transaction doing the provisioning cannot resolve the id it was
+    #     just handed. `web_save` reads every form field back in that same
+    #     transaction, so rendering the relation raised MissingError and rolled
+    #     the whole save back — no UI provisioning was possible at all.
+    #  2. `res.users.apikeys` is `_auto=False` and core GCs expired keys with a
+    #     raw-SQL DELETE (`_gc_user_apikeys`), so `ondelete="set null"` — which
+    #     only ever rides on the ORM unlink — left the pointer dangling and
+    #     broke every read of the user form.
+    #
+    # Both are the same defect: an ORM relation onto a table with no real FK
+    # whose rows can vanish or be invisible. This field is pure bookkeeping
+    # (which key do we own?), so it stores the bare id and nothing ever reads
+    # through it. `_orc_key_exists` is the one place that resolves it, and it
+    # tolerates a missing row. 0 means "we own no key".
+    orc_api_key_ref = fields.Integer(
         string="Managed API key",
         readonly=True,
-        ondelete="set null",
         copy=False,
+        help=(
+            "Internal id of the auto-managed res.users.apikeys row this user "
+            "owns. Stored as a plain id, not a relation: the key row may be "
+            "committed by another transaction or garbage-collected by core, "
+            "and neither must be able to break the user form."
+        ),
     )
     orc_is_manager = fields.Boolean(
         string="Is AI Workplace manager",
@@ -228,7 +253,7 @@ class ResUsers(models.Model):
                 # runs cursors at REPEATABLE READ, so the caller's snapshot —
                 # opened before this nested cursor committed — cannot see the
                 # new row. That empty result made the caller store
-                # `orc_api_key_id = False`; the nightly orphan-cleanup cron then
+                # `orc_api_key_ref = 0`; the nightly orphan-cleanup cron then
                 # reaped the now-unreferenced key out from under AI Workplace,
                 # breaking the user's Odoo access on every rotation while the
                 # gateway kept the (now dead) key.
@@ -250,18 +275,19 @@ class ResUsers(models.Model):
 
         # Return the id (not a recordset): the row is committed but invisible to
         # the caller's snapshot, so a recordset read here would be empty. The id
-        # is a plain int the caller stores directly into orc_api_key_id
+        # is a plain int the caller stores directly into orc_api_key_ref
         # (res.users.apikeys is _auto=False → no FK existence check on write).
         return raw_key, new_key_id
 
-    def _orc_revoke_key(self, key_ref, commit=False):
-        """Revoke an Odoo API key. ``key_ref`` is either a
-        ``res.users.apikeys`` recordset (the OLD key, visible in the caller's
-        transaction) or a bare int id (the freshly generated key, committed in
-        its own cursor and therefore NOT visible under the caller's REPEATABLE
-        READ snapshot — so we must NOT gate on a caller-side ``.exists()``).
+    def _orc_revoke_key(self, key_id, commit=False):
+        """Revoke an Odoo API key by bare id.
+
+        Always an id, never a recordset: the freshly generated key is committed
+        in its own cursor and is therefore NOT visible under the caller's
+        REPEATABLE READ snapshot, so browsing it here can legitimately resolve
+        to nothing. Each branch below gates on its own ``.exists()`` in the
+        cursor that will do the unlink, rather than trusting the caller's.
         """
-        key_id = key_ref if isinstance(key_ref, int) else (key_ref.id if key_ref else False)
         if not key_id:
             return
         if commit:
@@ -285,6 +311,19 @@ class ResUsers(models.Model):
                 row.unlink()
         except Exception as exc:
             _logger.warning("[orc] failed to revoke key %s: %s", key_id, exc)
+
+    def _orc_key_exists(self, key_id):
+        """True when ``key_id`` resolves to a live api-key row *in this
+        transaction*. Uses ``exists()``, which returns an empty recordset for a
+        missing row instead of raising — the whole reason the ownership pointer
+        is a bare id. Note the "in this transaction" caveat is load-bearing: a
+        key committed by another cursor after this transaction's snapshot opened
+        reads as missing here, which is correct for every caller (all of them
+        run in a fresh transaction: crons and the reconcile pass).
+        """
+        if not key_id:
+            return False
+        return bool(self.env["res.users.apikeys"].sudo().browse(key_id).exists())
 
     def _orc_stamp_sync(self, status, message=""):
         """Stamp the last-sync triple on this recordset. Always called
@@ -321,7 +360,7 @@ class ResUsers(models.Model):
             # returns the new key's id (int) — captured inside the generating
             # cursor, because the outer snapshot can't see the committed row.
             new_raw_key, new_key_id = user._orc_generate_api_key()
-            old_key_row = user.orc_api_key_id
+            old_key_id = user.orc_api_key_ref
 
             try:
                 # 2. Ensure the org_user exists in AI Workplace.  Two-
@@ -371,12 +410,12 @@ class ResUsers(models.Model):
             # 4. Revoke old key (if any). Best-effort — its presence
             #    won't leak access now that AI Workplace has the new one, but we
             #    remove it to cap blast radius.
-            if old_key_row and old_key_row.id != new_key_id:
-                user._orc_revoke_key(old_key_row)
+            if old_key_id and old_key_id != new_key_id:
+                user._orc_revoke_key(old_key_id)
 
             now = fields.Datetime.now()
             user.sudo().write({
-                "orc_api_key_id": new_key_id,
+                "orc_api_key_ref": new_key_id,
                 "orc_provisioned_at": user.orc_provisioned_at or now,
                 "orc_last_rotation_at": now,
                 "orc_gateway_email": eff_email,
@@ -384,7 +423,7 @@ class ResUsers(models.Model):
 
             self.env["orc.audit.log"].sudo().create({
                 "user_id": user.id,
-                "action": "provision" if not old_key_row else "rotate",
+                "action": "provision" if not old_key_id else "rotate",
                 "status": "ok",
             })
 
@@ -418,10 +457,10 @@ class ResUsers(models.Model):
                 })
                 raise
 
-            user._orc_revoke_key(user.orc_api_key_id)
+            user._orc_revoke_key(user.orc_api_key_ref)
             user.sudo().write({
                 "orc_enabled": False,
-                "orc_api_key_id": False,
+                "orc_api_key_ref": 0,
                 "orc_last_rotation_at": False,
                 # orc_user_id + orc_provisioned_at kept as breadcrumbs;
                 # re-ticking replays provisioning against the same AI Workplace
@@ -437,7 +476,7 @@ class ResUsers(models.Model):
     # --- Toggle hook -----------------------------------------------------------
 
     # Re-entry guard. The (de)provision flows write back to res.users
-    # to record their bookkeeping (orc_api_key_id, orc_last_*); without
+    # to record their bookkeeping (orc_api_key_ref, orc_last_*); without
     # a marker the write override below would re-trigger them and
     # recurse forever. Anything tagged with this context bypasses the
     # provisioning logic and just persists the row.
@@ -478,7 +517,7 @@ class ResUsers(models.Model):
 
         flip_to = vals["orc_enabled"]
         # Mark the cascade so action_orc_provision / action_orc_deprovision's
-        # internal writes can persist orc_api_key_id, orc_last_rotation_at,
+        # internal writes can persist orc_api_key_ref, orc_last_rotation_at,
         # and (when deprovisioning) orc_enabled itself without re-entering
         # this hook.
         self_inflight = self.with_context(**{self._ORC_INFLIGHT_CTX: True})
@@ -488,9 +527,9 @@ class ResUsers(models.Model):
             # there's no live AI Workplace-managed API key — covers both the
             # "never enrolled" case (orc_user_id is None) and the
             # "previously unchecked, now re-ticked" case (orc_user_id
-            # survives as a breadcrumb but orc_api_key_id was cleared
+            # survives as a breadcrumb but orc_api_key_ref was cleared
             # on deprovision).
-            if flip_to and not user.orc_api_key_id:
+            if flip_to and not user.orc_api_key_ref:
                 user.action_orc_provision()
                 user._orc_stamp_sync("ok", "provisioned on save")
             elif not flip_to and user.orc_user_id:
@@ -632,14 +671,13 @@ class ResUsers(models.Model):
                     user.sudo().write({"orc_gateway_email": email})
                 # Validity guard: AI Workplace holding a key ROW is NOT proof
                 # the key works. If our local ownership pointer is lost
-                # (orc_api_key_id empty, or dangling to a GC'd row), the key AI
+                # (orc_api_key_ref empty, or dangling to a GC'd row), the key AI
                 # Workplace stores is one Odoo no longer has — every tool call
                 # fails to authenticate. Re-provision to restore a matching
                 # pair rather than stamping "in sync" over a dead key. (Cheap:
                 # a local field read, no extra network. Self-heals users left
                 # broken by the rotation-pointer bug.)
-                owned = user.orc_api_key_id
-                if owned and owned.exists():
+                if user._orc_key_exists(user.orc_api_key_ref):
                     user._orc_stamp_sync("ok", "in sync")
                     continue
                 try:
@@ -745,36 +783,41 @@ class ResUsers(models.Model):
     def _cron_orc_orphan_cleanup(self):
         """Two-direction orphan cleanup for the managed-key relation.
 
-        Forward (user → key): clear ``orc_api_key_id`` pointers that
+        Forward (user → key): clear ``orc_api_key_ref`` pointers that
         reference a ``res.users.apikeys`` row which no longer exists.
-        This can't be left to the field's ``ondelete="set null"``:
-        ``res.users.apikeys`` is ``_auto=False`` so Odoo never creates
-        a real DB FK for the Many2one, and Odoo core garbage-collects
-        expired keys with a raw-SQL ``DELETE`` (``_gc_user_apikeys``)
-        that bypasses the ORM unlink the ``set null`` rule rides on.
-        A stale pointer makes every read of the user (e.g. opening the
-        user form) raise ``MissingError``, so heal it nightly.
+        Odoo core garbage-collects expired keys with a raw-SQL ``DELETE``
+        (``_gc_user_apikeys``), and ``res.users.apikeys`` is ``_auto=False``
+        so there is no real FK to cascade the deletion into this column
+        either — the pointer is simply left dangling.
+
+        Since the pointer is a bare id (see the field comment) a dangling
+        value is now harmless rather than fatal: nothing reads through it,
+        and ``_orc_key_exists`` treats it as "we own no key", so reconcile
+        re-provisions. This pass is bookkeeping hygiene — it keeps the
+        column honest so the reverse direction below can trust it.
 
         Reverse (key → user): revoke AI Workplace-tagged api keys not
         referenced by any res.users.
         """
-        # Forward direction — raw SQL, since the dangling rows are
-        # invisible to the ORM (the referenced key is already gone).
+        # Forward direction — plain SQL: this is a bulk predicate over a
+        # column, and the rows it corrects are exactly the ones whose
+        # referenced key is already gone.
         self.env.cr.execute(
             """
-            UPDATE res_users u SET orc_api_key_id = NULL
-            WHERE orc_api_key_id IS NOT NULL
+            UPDATE res_users u SET orc_api_key_ref = 0
+            WHERE orc_api_key_ref IS NOT NULL
+              AND orc_api_key_ref != 0
               AND NOT EXISTS (
-                  SELECT 1 FROM res_users_apikeys k WHERE k.id = u.orc_api_key_id
+                  SELECT 1 FROM res_users_apikeys k WHERE k.id = u.orc_api_key_ref
               )
             """
         )
         if self.env.cr.rowcount:
             _logger.info(
-                "[orc] cleared %s dangling orc_api_key_id pointer(s)",
+                "[orc] cleared %s dangling orc_api_key_ref pointer(s)",
                 self.env.cr.rowcount,
             )
-        # Drop any cached stale Many2one values read before the UPDATE.
+        # Drop any cached values read before the UPDATE.
         self.env.invalidate_all()
 
         # Reverse direction — key rows no user points at.
@@ -790,7 +833,13 @@ class ResUsers(models.Model):
             ("name", "=", ORC_KEY_NAME),
             ("create_date", "<", grace_cutoff),
         ])
-        referenced_ids = set(self.search([("orc_api_key_id", "!=", False)]).mapped("orc_api_key_id.id"))
+        # `> 0`, not `!= 0`: the column is nullable (rows predating the
+        # 19.0.1.0.7 migration, and any user never provisioned), and Odoo
+        # renders `!=` on an integer as "value differs OR IS NULL" — which
+        # would pull every unprovisioned user into the scan for nothing.
+        referenced_ids = set(
+            self.search([("orc_api_key_ref", ">", 0)]).mapped("orc_api_key_ref")
+        )
         for k in keys:
             if k.id not in referenced_ids:
                 _logger.info("[orc] revoking orphan key %s (user=%s)", k.id, k.user_id.login)

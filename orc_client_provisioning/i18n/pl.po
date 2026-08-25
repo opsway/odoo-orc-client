@@ -131,7 +131,7 @@ msgid "Last synced at"
 msgstr "Ostatnia synchronizacja"
 
 #. module: orc_client_provisioning
-#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_api_key_id
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_api_key_ref
 msgid "Managed API key"
 msgstr "Zarządzany klucz API"
 
