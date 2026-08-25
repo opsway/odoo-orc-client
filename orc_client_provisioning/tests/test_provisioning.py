@@ -1,7 +1,24 @@
-from odoo.exceptions import MissingError, UserError
+from unittest.mock import patch
+
+from odoo.exceptions import UserError
 from odoo.tests import TransactionCase
 
 from .common import patch_orc_client, share_test_cursor
+
+# The AI Workplace page of the user form, as the web client asks for it on
+# save. Kept faithful to views/res_users_views.xml: every field there is in
+# the read-back spec, including ones hidden behind a *dynamic* `invisible`
+# modifier (the client evaluates those itself, so they stay in the spec).
+USER_FORM_SPEC = {
+    "orc_enabled": {},
+    "orc_user_id": {},
+    "orc_provisioned_at": {},
+    "orc_last_rotation_at": {},
+    "orc_last_sync_at": {},
+    "orc_last_sync_status": {},
+    "orc_last_sync_message": {},
+    "orc_api_key_ref": {},
+}
 
 
 class TestOrcProvisioning(TransactionCase):
@@ -47,8 +64,9 @@ class TestOrcProvisioning(TransactionCase):
             self.user.orc_enabled = True
         self.user.invalidate_recordset()
         self.assertEqual(self.user.orc_user_id, "orc-uid-1")
-        self.assertTrue(self.user.orc_api_key_id)
-        self.assertEqual(self.user.orc_api_key_id.name, "AI Workplace (auto-managed)")
+        self.assertTrue(self.user.orc_api_key_ref)
+        key = self.env["res.users.apikeys"].sudo().browse(self.user.orc_api_key_ref)
+        self.assertEqual(key.name, "AI Workplace (auto-managed)")
         self.assertTrue(self.user.orc_provisioned_at)
         self.assertTrue(self.user.orc_last_rotation_at)
         log = self.env["orc.audit.log"].search([("user_id", "=", self.user.id)], limit=1)
@@ -94,7 +112,7 @@ class TestOrcProvisioning(TransactionCase):
         # Rollback: no ORC uid, no key row persists.
         self.user.invalidate_recordset()
         self.assertFalse(self.user.orc_user_id)
-        self.assertFalse(self.user.orc_api_key_id)
+        self.assertFalse(self.user.orc_api_key_ref)
 
     def test_deprovision_revokes_this_infra_only_and_keeps_breadcrumb(self):
         """Per A₁: unticking `orc_enabled` is per-infra revoke.
@@ -115,7 +133,7 @@ class TestOrcProvisioning(TransactionCase):
             self.user.orc_enabled = True
         self.assertTrue(self.user.orc_user_id)
         orc_uid = self.user.orc_user_id
-        key_id = self.user.orc_api_key_id.id
+        key_id = self.user.orc_api_key_ref
 
         with self._patch_client(revoke_infra_access=capture_revoke):
             self.user.orc_enabled = False
@@ -125,7 +143,7 @@ class TestOrcProvisioning(TransactionCase):
         # Breadcrumb retained.
         self.assertEqual(self.user.orc_user_id, orc_uid)
         # Managed key row on Odoo side is gone.
-        self.assertFalse(self.user.orc_api_key_id)
+        self.assertFalse(self.user.orc_api_key_ref)
         self.assertFalse(self.env["res.users.apikeys"].search([("id", "=", key_id)]))
         # ORC was told to revoke using the gateway identity (orc_gateway_email
         # stored at provision time). For alice@acme.test it equals login.
@@ -152,55 +170,56 @@ class TestOrcProvisioning(TransactionCase):
             self.user.orc_enabled = True
 
         self.user.invalidate_recordset()
-        self.assertTrue(self.user.orc_api_key_id)  # fresh key pushed
+        self.assertTrue(self.user.orc_api_key_ref)  # fresh key pushed
         # provision_user was actually called despite the breadcrumb
-        # being present (write-hook keys off `orc_api_key_id`, not
+        # being present (write-hook keys off `orc_api_key_ref`, not
         # `orc_user_id`, to catch re-enrolment).
         self.assertEqual(len(provision_calls), 1)
 
-    def test_orphan_cleanup_clears_dangling_apikey_pointer(self):
-        """A managed key hard-deleted out-of-band leaves orc_api_key_id
-        dangling, which breaks every read of the user form.
+    def test_dangling_apikey_pointer_does_not_break_the_user_form(self):
+        """A managed key hard-deleted out-of-band must not make the user
+        unreadable.
 
         Odoo core GCs expired api keys with a raw-SQL DELETE
         (`_gc_user_apikeys`). Because `res.users.apikeys` is `_auto=False`
-        there is no real DB FK, so the field's `ondelete="set null"`
-        (enforced only by the ORM unlink) never fires and the pointer is
-        left referencing a row that no longer exists. Reading the linked
-        key — as the user form does to render the Many2one — then raises
-        MissingError. The nightly orphan-cleanup cron must heal it.
+        there is no real DB FK either, so nothing cascades into the ownership
+        pointer and it is left referencing a row that no longer exists. While
+        this was a Many2one that state raised MissingError on every read of
+        the user — the form would not even open, and healing it needed a cron
+        that a neutralized (staging) database has switched off. As a bare id
+        the dangling value is inert.
         """
         with self._patch_client():
             self.user.orc_enabled = True
         self.user.invalidate_recordset()
-        key_id = self.user.orc_api_key_id.id
+        key_id = self.user.orc_api_key_ref
         self.assertTrue(key_id)
 
-        # Simulate core's raw-SQL GC of the expired key: bypasses the
-        # ORM unlink, so ondelete="set null" never runs.
+        # Simulate core's raw-SQL GC of the expired key.
         self.env.cr.execute(
             "DELETE FROM res_users_apikeys WHERE id = %s", (key_id,)
         )
         self.env.invalidate_all()
 
-        # Repro: the dangling pointer makes the user form unrenderable.
-        with self.assertRaises(MissingError):
-            self.user.orc_api_key_id.display_name
+        # The form reads end-to-end while the pointer is still dangling —
+        # no cron, no migration, nothing to heal first.
+        self.user.web_read(USER_FORM_SPEC)
+        self.assertEqual(self.user.orc_api_key_ref, key_id)
+        # ...and the pointer reads as "we own no key", so reconcile treats it
+        # as drift and re-provisions rather than stamping "in sync".
+        self.assertFalse(self.user._orc_key_exists(self.user.orc_api_key_ref))
 
-        # Nightly cleanup clears the dangling pointer.
+        # Nightly cleanup still tidies the column up.
         self.env["res.users"]._cron_orc_orphan_cleanup()
-
         self.user.invalidate_recordset()
-        self.assertFalse(self.user.orc_api_key_id)
-        # The user form now reads end-to-end (no MissingError).
-        self.user.web_read({"orc_api_key_id": {"fields": {"display_name": {}}}})
+        self.assertFalse(self.user.orc_api_key_ref)
 
     # -- rotation key-pointer / reconcile-validity regression -------------------
 
     def test_reconcile_reprovisions_when_local_key_pointer_lost(self):
         """Regression for the rotation data-loss bug.
 
-        A rotation once left `orc_api_key_id` empty (the outer-transaction
+        A rotation once left `orc_api_key_ref` empty (the outer-transaction
         re-read couldn't see the key committed in the nested cursor) while the
         gateway still held the pushed key. The orphan reaper then deleted the
         Odoo key, so the gateway's key could no longer authenticate — yet
@@ -216,7 +235,7 @@ class TestOrcProvisioning(TransactionCase):
         email = self.user._orc_gateway_identity()
 
         # Simulate the drift: gateway still lists the user, local pointer gone.
-        self.user.sudo().write({"orc_api_key_id": False})
+        self.user.sudo().write({"orc_api_key_ref": 0})
 
         provision_calls: list[dict] = []
 
@@ -233,7 +252,7 @@ class TestOrcProvisioning(TransactionCase):
         self.user.invalidate_recordset()
         self.assertEqual(len(provision_calls), 1,
                          "lost pointer must trigger re-provision, not 'in sync'")
-        self.assertTrue(self.user.orc_api_key_id, "ownership pointer restored")
+        self.assertTrue(self.user.orc_api_key_ref, "ownership pointer restored")
         self.assertIn("healed", (self.user.orc_last_sync_message or "").lower())
 
     def test_reconcile_stays_in_sync_when_pointer_is_valid(self):
@@ -268,11 +287,11 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client():
             self.user.orc_enabled = True
         self.user.invalidate_recordset()
-        key_id = self.user.orc_api_key_id.id
+        key_id = self.user.orc_api_key_ref
         self.assertTrue(key_id)
 
         # Make it unreferenced (the lost-pointer state).
-        self.user.sudo().write({"orc_api_key_id": False})
+        self.user.sudo().write({"orc_api_key_ref": 0})
 
         # Fresh (create_date = now) → protected by the grace window.
         self.env["res.users"]._cron_orc_orphan_cleanup()
@@ -294,6 +313,48 @@ class TestOrcProvisioning(TransactionCase):
             self.env["res.users.apikeys"].browse(key_id).exists(),
             "an aged unreferenced managed key must be reaped",
         )
+
+    # -- form-save read-back regression ----------------------------------------
+
+    def test_form_save_provisions_when_the_new_key_row_is_unreadable(self):
+        """Ticking the checkbox on the user FORM must provision and commit.
+
+        `web_save` is `write()` **plus a read-back in the same transaction**
+        (odoo/addons/web/models/models.py). Provisioning stores the id of a key
+        row created in a nested cursor that commits on its own, so the
+        enclosing transaction — REPEATABLE READ, snapshot opened before that
+        commit — cannot resolve the id it was just handed. Any ORM read of the
+        pointed-at row therefore raised
+        `MissingError: res.users.apikeys(N,)` and rolled the whole save back:
+        the key was already minted and pushed to the gateway, but Odoo kept no
+        record of it and `orc_enabled` never persisted, so admins could not
+        provision anybody from the UI at all.
+
+        The suite cannot reproduce the cross-transaction invisibility directly
+        (`share_test_cursor` makes that nested cursor a savepoint, which is the
+        reason this shipped green), so we simulate the one thing the enclosing
+        transaction actually observes: a pointer id that a SELECT in this
+        transaction cannot resolve. That is the same state a raw-SQL-GC'd key
+        leaves behind, which is why the fix covers both.
+        """
+        def unresolvable_key(_self, *args, **kwargs):
+            # A committed-elsewhere / already-GC'd row, from this
+            # transaction's point of view: the id is unresolvable.
+            return "raw-key-invisible-here", 987654321
+
+        with self._patch_client(), patch.object(
+            type(self.env["res.users"]),
+            "_orc_generate_api_key",
+            unresolvable_key,
+        ):
+            self.user.web_save({"orc_enabled": True}, USER_FORM_SPEC)
+
+        self.user.invalidate_recordset()
+        self.assertTrue(
+            self.user.orc_enabled,
+            "the form save must commit, not roll back on the read-back",
+        )
+        self.assertEqual(self.user.orc_user_id, "orc-uid-1")
 
     # -- bare-login tests -------------------------------------------------------
 

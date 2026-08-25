@@ -33,7 +33,7 @@
                         <field name="orc_user_id" readonly="1" invisible="not orc_enabled"/>
                         <field name="orc_provisioned_at" readonly="1" invisible="not orc_enabled"/>
                         <field name="orc_last_rotation_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_api_key_id" readonly="1" invisible="not orc_enabled"/>
+                        <field name="orc_api_key_ref" readonly="1" invisible="not orc_enabled"/>
                     </group>
                 </page>
             </xpath>
