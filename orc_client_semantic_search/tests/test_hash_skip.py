@@ -6,11 +6,13 @@ decides to skip. Tests use a mocked provider so we can assert on
 ``embed`` call counts."""
 from unittest.mock import MagicMock, patch
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import tagged
+
+from .common import SweepCase
 
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
-class HashSkipTests(TransactionCase):
+class HashSkipTests(SweepCase):
     def setUp(self):
         super().setUp()
         # Set provider creds so the cron actually runs.

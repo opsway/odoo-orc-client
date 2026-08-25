@@ -2,15 +2,17 @@
 → orc.embedding row. README "Indexing lifecycle" is the contract."""
 from unittest.mock import MagicMock, patch
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import tagged
 
 from odoo.addons.orc_client_semantic_search.providers.base import (
     EmbeddingProviderError,
 )
 
+from .common import SweepCase
+
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
-class IndexingLifecycleTests(TransactionCase):
+class IndexingLifecycleTests(SweepCase):
     def setUp(self):
         super().setUp()
         self.config = self.env["orc.embedding.config"].search(
