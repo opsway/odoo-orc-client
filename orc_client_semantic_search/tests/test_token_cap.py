@@ -354,14 +354,23 @@ class DailyTokenCapTests(SweepCase):
         # The other half of the guarantee above: the counter must not
         # ride on the sweep's transaction. Asserted on the shape, since
         # the durability it buys cannot be observed from here.
+        # Spy on the registry INSTANCE, not on `type(self.registry)`.
+        # Odoo 19's registry test mode installs its own `cursor` as an
+        # instance attribute (`patch.object(registry, 'cursor', ...)` in
+        # `TransactionCase._registry_test_mode_patches`), and that shadows
+        # anything patched onto the class — a class-level spy is simply
+        # never reached, so the assertion below fails against perfectly
+        # correct code. Patching the instance sees the call on both 18.0
+        # and 19.0; `real_cursor` is read off the instance for the same
+        # reason, so it stays whatever is actually in force.
         cursors = []
-        real_cursor = type(self.registry).cursor
+        real_cursor = self.registry.cursor
 
-        def spy(registry_self, *args, **kwargs):
+        def spy(*args, **kwargs):
             cursors.append(True)
-            return real_cursor(registry_self, *args, **kwargs)
+            return real_cursor(*args, **kwargs)
 
-        with patch.object(type(self.registry), "cursor", spy):
+        with patch.object(self.registry, "cursor", spy):
             self.global_cfg._token_budget_consume(42)
 
         self.assertTrue(
