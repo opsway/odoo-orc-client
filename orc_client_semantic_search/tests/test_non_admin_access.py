@@ -38,7 +38,7 @@ class NonAdminAccessTests(TransactionCase):
         cls.user = cls.env["res.users"].create({
             "name": "Semantic Search Editor",
             "login": "orc_semantic_editor",
-            "groups_id": [(6, 0, [cls.env.ref("base.group_user").id])],
+            "group_ids": [(6, 0, [cls.env.ref("base.group_user").id])],
         })
 
     def _queue_count(self, article_id):

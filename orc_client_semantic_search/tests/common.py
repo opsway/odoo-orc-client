@@ -30,5 +30,14 @@ class SweepCase(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.registry.enter_test_mode(self.cr)
-        self.addCleanup(self.registry.leave_test_mode)
+        # Odoo renamed the entry point in 19.0 — `Registry.enter_test_mode`
+        # is gone, replaced by `registry_enter_test_mode` on the test case
+        # (which wraps `self.cr` and registers its own cleanup). Dispatch on
+        # what the test case offers rather than on a version number, so this
+        # file stays identical on the 18.0 and 19.0 branches; same shape as
+        # `orc_client_provisioning.tests.common.share_test_cursor`.
+        if hasattr(self, "registry_enter_test_mode"):  # 19.0+
+            self.registry_enter_test_mode()
+        else:  # 18.0
+            self.registry.enter_test_mode(self.cr)
+            self.addCleanup(self.registry.leave_test_mode)

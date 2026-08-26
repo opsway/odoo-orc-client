@@ -119,18 +119,20 @@ class OrcEmbeddingConfig(models.Model):
         default="html_strip",
     )
 
-    _sql_constraints = [
-        (
-            "unique_global_singleton",
-            "EXCLUDE (is_global WITH =) WHERE (is_global = TRUE)",
-            "Only one global config row may exist.",
-        ),
-        (
-            "unique_per_model_name",
-            "UNIQUE (model_name)",
-            "Each Odoo model may have only one config row.",
-        ),
-    ]
+    # Odoo 19 dropped `_sql_constraints` — the loader logs
+    # "no longer supported" and creates nothing, so on 19.0 these were
+    # silently absent. The attribute name supplies the constraint name
+    # (`{table}_{attr without leading underscore}`), which reproduces the
+    # 18.0 names exactly, so an upgraded database keeps the constraint it
+    # already has instead of dropping and re-adding it.
+    _unique_global_singleton = models.Constraint(
+        "EXCLUDE (is_global WITH =) WHERE (is_global = TRUE)",
+        "Only one global config row may exist.",
+    )
+    _unique_per_model_name = models.Constraint(
+        "UNIQUE (model_name)",
+        "Each Odoo model may have only one config row.",
+    )
 
     @api.constrains("is_global", "model_name", "provider_kind")
     def _check_row_kind_fields(self):

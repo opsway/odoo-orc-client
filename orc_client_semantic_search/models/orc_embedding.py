@@ -52,13 +52,16 @@ class OrcEmbedding(models.Model):
         help="Provider id at indexing time, e.g. openai:text-embedding-3-small.",
     )
 
-    _sql_constraints = [
-        (
-            "unique_model_res_id",
-            "UNIQUE (model, res_id)",
-            "Only one embedding row per record.",
-        ),
-    ]
+    # Odoo 19 dropped `_sql_constraints` — the loader logs
+    # "no longer supported" and creates nothing, so on 19.0 these were
+    # silently absent. The attribute name supplies the constraint name
+    # (`{table}_{attr without leading underscore}`), which reproduces the
+    # 18.0 names exactly, so an upgraded database keeps the constraint it
+    # already has instead of dropping and re-adding it.
+    _unique_model_res_id = models.Constraint(
+        "UNIQUE (model, res_id)",
+        "Only one embedding row per record.",
+    )
 
     # ------------------------------------------------ provider factory
 
