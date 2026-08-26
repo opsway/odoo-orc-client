@@ -12,6 +12,10 @@ from unittest.mock import patch
 
 from odoo.tests import TransactionCase
 
+from odoo.addons.orc_client_tasks.services.orc_client_tasks_ext import (
+    EMBED_THEME_DEFAULT,
+)
+
 
 class TestOrcClientTasksExt(TransactionCase):
     def setUp(self):
@@ -277,14 +281,19 @@ class TestOrcClientTasksExt(TransactionCase):
     # toggles the dark class before paint
     # (see opsway/odoo-agent-gateway#85).
 
-    def test_embed_return_to_appends_dark_when_param_unset(self):
-        # Default behaviour — no admin override → dark, since the
-        # ORC dashboard is dark by default and the addon is meant
-        # to match that out of the box.
+    def test_embed_return_to_appends_the_default_when_param_unset(self):
+        # Default behaviour — no admin override → whatever
+        # `EMBED_THEME_DEFAULT` says. That was `dark` when this test was
+        # written; d63c1f5 ("light theme by default") flipped it to
+        # `light` to match the rebranded AI Workplace dashboard and did
+        # not update the assertion, so the test asserted a default the
+        # module had stopped having. Read the constant instead of
+        # restating it, so the next flip cannot desynchronise it again.
         room_id = "!abc:host"
         url = self.env["orc.client"]._build_embed_return_to(room_id)
         self.assertEqual(
-            url, "/tasks/%21abc%3Ahost?embed=1&theme=dark",
+            url,
+            f"/tasks/%21abc%3Ahost?embed=1&theme={EMBED_THEME_DEFAULT}",
         )
 
     def test_embed_return_to_appends_light_when_admin_sets_light(self):
@@ -294,16 +303,17 @@ class TestOrcClientTasksExt(TransactionCase):
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
         self.assertTrue(url.endswith("&theme=light"), url)
 
-    def test_embed_return_to_falls_back_to_dark_on_garbage_value(self):
+    def test_embed_return_to_falls_back_to_the_default_on_garbage_value(self):
         # Defensive: an admin who fat-fingers `orange` shouldn't
         # send a garbage param to ORC (which would silently leave
         # the SSR cookie default in place — bad UX). Coerce to
-        # the documented default.
+        # the documented default — the constant, not a hardcoded
+        # copy of what it happened to be (see the test above).
         self.env["ir.config_parameter"].sudo().set_param(
             "orc_client_tasks.embed_theme", "orange",
         )
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
-        self.assertTrue(url.endswith("&theme=dark"), url)
+        self.assertTrue(url.endswith(f"&theme={EMBED_THEME_DEFAULT}"), url)
 
     def test_embed_return_to_percent_encodes_room_id(self):
         # `:` and `!` must be percent-encoded so the path component
