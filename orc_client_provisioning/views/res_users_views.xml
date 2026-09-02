@@ -59,7 +59,7 @@
         <field name="model">res.users</field>
         <field name="inherit_id" ref="base.view_users_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//list/field[@name='login']" position="after">
+            <xpath expr="//tree/field[@name='login']" position="after">
                 <field name="orc_enabled" optional="show"/>
                 <!-- Hidden by default (the common case is read/write, so a
                      column of empty checkboxes earns nothing); one click in

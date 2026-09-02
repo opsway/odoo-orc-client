@@ -76,7 +76,7 @@
         <field name="name">orc.embedding.config.list</field>
         <field name="model">orc.embedding.config</field>
         <field name="arch" type="xml">
-            <list string="AI Semantic Search Config">
+            <tree string="AI Semantic Search Config">
                 <field name="is_global"/>
                 <field name="model_name"/>
                 <field name="enabled"/>
@@ -84,14 +84,14 @@
                 <field name="text_field_path"/>
                 <field name="text_extractor"/>
                 <field name="provider_model"/>
-            </list>
+            </tree>
         </field>
     </record>
 
     <record id="action_orc_embedding_config" model="ir.actions.act_window">
         <field name="name">AI Semantic Search</field>
         <field name="res_model">orc.embedding.config</field>
-        <field name="view_mode">list,form</field>
+        <field name="view_mode">tree,form</field>
     </record>
 
     <!--
@@ -116,7 +116,7 @@
         <field name="model">knowledge.article</field>
         <field name="inherit_id" ref="knowledge.knowledge_article_view_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//list" position="inside">
+            <xpath expr="//tree" position="inside">
                 <field name="orc_ai_index_exclude"
                        string="Excluded from AI index"
                        optional="hide"/>

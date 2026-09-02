@@ -7,7 +7,7 @@ repo, not here.
 
 ## What this module is
 
-A self-contained Odoo 18 addon that:
+A self-contained Odoo 17 addon that:
 1. Listens to `create`/`write` on configured models.
 2. Enqueues a reindex marker per affected record.
 3. A cron sweeps the queue, calls the configured embedding provider,

@@ -264,19 +264,23 @@ class ResUsers(models.Model):
         REPEATABLE READ snapshot cannot see the just-committed row.
         """
         self.ensure_one()
-        icp = self.env["ir.config_parameter"].sudo()
-        rotation_days = int(icp.get_param("orc.rotation_days") or 30)
-        expiration = fields.Datetime.add(fields.Datetime.now(), days=rotation_days)
         try:
             # Own cursor → commits on clean exit, so the row is visible to AI
             # Workplace's cross-connection probe before the caller pushes it.
             with self.env.registry.cursor() as key_cr:
                 key_env = api.Environment(key_cr, self.env.uid, self.env.context)
+                # No expiry passed: 17.0's `res.users.apikeys` has neither the
+                # `expiration_date` column nor the `_generate` parameter (both
+                # arrived in 18.0). Nothing is lost — key lifetime is enforced
+                # entirely on the Odoo side by `_cron_orc_rotate_keys`, which
+                # regenerates on `orc_last_rotation_at` age against
+                # `orc.rotation_days`. The column was only ever a second,
+                # redundant expiry that fired at the same cadence.
                 raw_key = (
                     key_env["res.users.apikeys"]
                     .with_user(self.id)
                     .sudo()
-                    ._generate(scope=None, name=ORC_KEY_NAME, expiration_date=expiration)
+                    ._generate(scope=None, name=ORC_KEY_NAME)
                 )
                 # Capture the id HERE, inside the generating cursor, where the
                 # row is unambiguously visible. Re-searching from the *outer*
