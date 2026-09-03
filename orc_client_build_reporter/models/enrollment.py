@@ -113,6 +113,7 @@ from odoo.tools import config
 from .build_reporter import (
     get_project_root,
     get_repo_from_git,
+    parse_dev_url,
 )
 
 _logger = logging.getLogger(__name__)
@@ -132,17 +133,18 @@ _PARAM_ENROLL_BASE = "orc_client_build_reporter.enroll_base"
 _PARAM_ENROLL_SECRET = "orc.enroll_secret"
 # `<branch_slug>:<build_id>`, stamped only after a successful enrollment so a
 # reconnected build does not enroll again on every restart.
+_ENV_BUILD_URL = "ODOO_BUILD_URL"
 _PARAM_ENROLL_DONE = "orc_client_build_reporter.enroll_done_key"
-
-# Distinct from the reporter's key: the two guard different work and must not
-# exclude one another.
-_ADVISORY_LOCK_KEY = 1108763548
 
 _ATTEMPTS = 3
 _BACKOFF_SECONDS = (2, 5)
-# Under AI Workplace's nginx cap for this location; a longer client timeout
-# would just wait past the point the server stopped listening.
-_POST_TIMEOUT = 10
+# ABOVE the server's own budget for this request, not below it. Workplace
+# spends up to 6s fetching our challenge plus 6s on the mint, under a 15s nginx
+# cap — so a 10s client timeout, which is what this used to be, gives up while a
+# mint is still in flight. That is the worst possible moment to stop listening:
+# the challenge is spent and the credential is issued to nobody. Wait past the
+# cap so we receive the server's answer, whatever it is.
+_POST_TIMEOUT = 20
 
 _SKIP_TEST_MODE = "test mode"
 _SKIP_STOP_AFTER_INIT = (
@@ -262,14 +264,116 @@ def _skip_reason():
     return None
 
 
-def _try_lock(cr):
-    """Take enrollment's transaction-scoped advisory lock, or give up.
+def _params(cr, keys):
+    """Read parameters straight off the transaction.
 
-    Non-blocking: the holder is writing the very secret this worker would have
-    written, and commits within microseconds.
+    Deliberately not ``ICP.get_param``: that is ``@ormcache``'d on the key, so
+    it can hand back a value this process cached before another worker wrote a
+    different one — exactly the staleness the lock exists to eliminate.
     """
-    cr.execute("SELECT pg_try_advisory_xact_lock(%s)", (_ADVISORY_LOCK_KEY,))
-    return bool(cr.fetchone()[0])
+    cr.execute(
+        "SELECT key, value FROM ir_config_parameter WHERE key = ANY(%s)",
+        (list(keys),),
+    )
+    return {k: (v or "").strip() for k, v in cr.fetchall()}
+
+
+def _flush_params(env):
+    """Push pending ORM writes down so a raw SELECT can see them.
+
+    Core's own ``_get_param`` does the same. Without it a ``set_param`` made
+    earlier in this transaction is invisible to ``_params``.
+    """
+    env["ir.config_parameter"].sudo().flush_model(["key", "value"])
+
+
+def _provisioning_installed(env):
+    """Is there anything here that would READ the credential we are asking for?
+
+    Enrolling without ``orc_client_provisioning`` would mint a real token and
+    park it in parameters nothing reads — a live credential created for no
+    reason, which is the kind of thing that is only ever discovered during an
+    incident.
+    """
+    return bool(env["ir.module.module"].sudo().search_count([
+        ("name", "=", "orc_client_provisioning"),
+        ("state", "=", "installed"),
+    ]))
+
+
+def _needs_enrollment(cfg):
+    """True when this Odoo cannot talk to AI Workplace.
+
+    The same three parameters ``orc.client._config`` requires. Enrollment is a
+    REPAIR, not a provisioning path: a configured build must never re-enroll,
+    because that would mint a fresh token and supersede the working one on
+    every restart.
+    """
+    return not all(
+        cfg.get(k) for k in
+        ("orc.endpoint_url", "orc.org_token", "orc.infrastructure_id")
+    )
+
+
+def claim_secret(dbname):
+    """The committed preimage for this build, in its OWN short transaction.
+
+    Writes one only if none is committed yet, and returns whatever is committed
+    when it finishes. The transaction is short and separate on purpose: a NEW
+    transaction takes a NEW snapshot, which is the only way to see a value
+    another worker committed after ours began.
+
+    ## Why there is no advisory lock here any more
+
+    The first version took `pg_try_advisory_xact_lock` and re-read the value
+    "under the lock", claiming a loser would then see the winner's secret.
+    Measured against Postgres, that is false: Odoo cursors run at REPEATABLE
+    READ, the snapshot is fixed by the transaction's first statement, and a
+    re-read later in the same transaction returns `<invisible>` for a row
+    committed after it. The lock excluded writers but the re-read could never
+    observe what they wrote, so the safety argument the module documented did
+    not hold.
+
+    An `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` upsert does not rescue
+    it either — under REPEATABLE READ that raises `could not serialize access
+    due to concurrent update` rather than handing back the winner's row. Both
+    were measured, not reasoned about.
+
+    So the design stops pretending to be mutually exclusive and becomes
+    CONVERGENT, which is all this actually needs:
+
+      * a worker writes a secret only when it sees none committed;
+      * a worker that loses the write race catches the failure and re-reads in
+        a fresh transaction, where the winner's value IS visible;
+      * every POST attempt re-reads before submitting, so a worker that read a
+        value which has since been replaced submits the current one on its next
+        attempt rather than a stale one.
+
+    What is left unhandled is deliberately small: in the brief window where two
+    workers both see nothing, one write wins and the other re-reads it. Nobody
+    publishes a hash of a secret that is not the committed one for longer than
+    a single attempt.
+    """
+    try:
+        with Registry(dbname).cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            existing = _params(cr, [_PARAM_ENROLL_SECRET]).get(_PARAM_ENROLL_SECRET)
+            if existing:
+                return existing
+            secret = secrets.token_hex(32)
+            env["ir.config_parameter"].sudo().set_param(_PARAM_ENROLL_SECRET, secret)
+            return secret
+    except Exception as e:
+        # Lost the write race: a unique violation on `key`, or a serialization
+        # failure. Either way the winner's value is committed, and a FRESH
+        # transaction is what makes it readable.
+        _logger.info("[orc_enrollment] lost the secret write race (%s); "
+                     "re-reading the committed one", e)
+        try:
+            with Registry(dbname).cursor() as cr:
+                return _params(cr, [_PARAM_ENROLL_SECRET]).get(_PARAM_ENROLL_SECRET)
+        except Exception:
+            return None
 
 
 def _params(cr, keys):
@@ -323,29 +427,26 @@ def _needs_enrollment(cfg):
     )
 
 
-def _claim_secret(env, cfg):
-    """The committed preimage for this build, generating one only if absent.
+def _forget_secret(dbname, done_key):
+    """Drop the challenge secret so the next boot starts a fresh enrollment.
 
-    Claim-once-and-re-read is what makes a committed secret safe across
-    workers: a worker that loses the lock re-reads the winner's value instead
-    of overwriting it, so every worker publishes and submits the same ``S``.
+    Called wherever a challenge is spent but no credential was stored. Without
+    it the next boot republishes the same commitment, is told the challenge is
+    already spent, and reads that as somebody else's success — a build that
+    never reconnects and never says why.
+
+    `enroll_done_key` is cleared too: this build did NOT finish enrolling, and
+    leaving the stamp would suppress the retry it needs.
     """
-    existing = cfg.get(_PARAM_ENROLL_SECRET)
-    if existing:
-        return existing
-    if not _try_lock(env.cr):
-        # The holder is mid-write and commits imminently. Nothing to wait for;
-        # the retry below re-reads.
-        return None
-    # Re-read UNDER the lock: another worker may have committed between our
-    # first read and acquiring it.
-    _flush_params(env)
-    fresh = _params(env.cr, [_PARAM_ENROLL_SECRET]).get(_PARAM_ENROLL_SECRET)
-    if fresh:
-        return fresh
-    secret = secrets.token_hex(32)
-    env["ir.config_parameter"].sudo().set_param(_PARAM_ENROLL_SECRET, secret)
-    return secret
+    try:
+        with Registry(dbname).cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            ICP = env["ir.config_parameter"].sudo()
+            ICP.set_param(_PARAM_ENROLL_SECRET, False)
+            if ICP.get_param(_PARAM_ENROLL_DONE) == done_key:
+                ICP.set_param(_PARAM_ENROLL_DONE, False)
+    except Exception:
+        _logger.exception("[orc_enrollment] could not clear the challenge secret")
 
 
 def _apply(env, minted):
@@ -360,9 +461,10 @@ def _apply(env, minted):
     ICP.set_param("orc.endpoint_url", minted["endpoint_url"])
     ICP.set_param("orc.org_token", minted["token"])
     ICP.set_param("orc.infrastructure_id", minted["infrastructure_id"])
-    # `orc.rotation_days` is NOT in neutralize.sql's DELETE list, so it
-    # normally survives; restore the documented default only if a restore
-    # dropped it too.
+    # `orc.rotation_days` IS deleted by `orc_client_provisioning`'s own
+    # neutralize.sql (it names all four `orc.*` keys), so on a neutralized
+    # build this branch is the normal path, not the exception. Restoring the
+    # documented default keeps key rotation working after a reconnect.
     if not (ICP.get_param("orc.rotation_days") or "").strip():
         ICP.set_param("orc.rotation_days", "30")
 
@@ -400,8 +502,30 @@ def _post_enrollment(url, body, attempt):
     # 409 is the single-use anchor doing its job: some worker of this same
     # build already spent this challenge and is applying the credential.
     if r.status_code == 409:
-        return "spent", None
-    detail = (r.text or "").strip()[:200]
+        # NOT unconditionally "a sibling worker won". The mint boundary also
+        # answers 409 for `ambiguous binding for this branch` (two armed
+        # infrastructures share this slug) and for a stale build — operator
+        # misconfigurations that a retry will never fix and that must not be
+        # logged as somebody else's success. It passes its reason through
+        # rather than flattening it, so read it.
+        try:
+            reason = str(r.json().get("error") or "")
+        except Exception:
+            reason = ""
+        if "already spent" in reason:
+            return "spent", None
+        _logger.warning(
+            "[orc_enrollment] refused (409): %s — this needs an operator, "
+            "not a retry", reason or "<no reason given>")
+        return "stop", None
+    # Only the server's own `error` field, never the raw body. The verifying
+    # side does not echo the request today, but a body that ever did would put
+    # the PREIMAGE in the build log — and the module docstring promises it is
+    # never logged. Parse, do not splat.
+    try:
+        detail = str(r.json().get("error"))[:200]
+    except Exception:
+        detail = "<unparseable body>"
     _logger.warning(
         "[orc_enrollment] attempt %s refused: HTTP %s %s",
         attempt, r.status_code, detail,
@@ -420,7 +544,28 @@ def _run_enrollment(dbname, enroll_base):
     this build, or provisioning not installed.
     """
     try:
-        split = split_db_name(dbname)
+        # Belt-and-braces: `_register_hook` already refuses to spawn this
+        # thread under these conditions. Repeated here so a direct call
+        # (tests, `odoo shell`) obeys them too — and the stakes are higher than
+        # the reporter's, because an unguarded direct call does not post a
+        # report, it submits a live proof and can have a real credential minted
+        # into whatever database is open.
+        reason = _skip_reason()
+        if reason:
+            if reason is not _SKIP_TEST_MODE:
+                _logger.info("[orc_enrollment] skip: %s", reason)
+            return
+
+        # `ODOO_BUILD_URL` first, database name second — the same precedence
+        # the reporter uses, and for a stronger reason here: Workplace builds
+        # the host it dials as `<branch_slug>-<build_id>.dev.odoo.com`, so this
+        # field IS host-determining. Where the two disagree, the build URL is
+        # the one that matches the host actually serving our challenge; taking
+        # the database name would send Workplace to a host that 502s.
+        env_build_url = os.environ.get(_ENV_BUILD_URL) or ""
+        split = parse_dev_url(env_build_url) if env_build_url else None
+        if not split:
+            split = split_db_name(dbname)
         if not split:
             # Not an Odoo.sh build database. Self-hosted installs configure the
             # addon by hand and must never have a token minted at them.
@@ -454,41 +599,44 @@ def _run_enrollment(dbname, enroll_base):
                     done_key,
                 )
                 return
-            secret = _claim_secret(env, cfg)
-            # `orc.endpoint_url` is the AI Workplace ORIGIN, derived from the
-            # enrollment base we are about to POST to, so the addon never has
-            # to be told twice where its Workplace lives.
-            #
-            # Parsed rather than string-split: splitting on "/webhook/" quietly
-            # returns the WHOLE url for a base that does not contain it, which
-            # would write a path into `orc.endpoint_url` and break every later
-            # API call with a 404 that looks like a server problem.
-            endpoint_url = _origin_of(enroll_base)
-            if not endpoint_url:
-                _logger.warning(
-                    "[orc_enrollment] enrollment base %r has no usable origin",
-                    enroll_base)
-                return
+            pass
 
-        if not secret:
-            _logger.info("[orc_enrollment] another worker is claiming the "
-                         "challenge; leaving it to them")
+        # ---- 2. Validate what we will send, BEFORE claiming a secret -------
+        #
+        # Order matters. Claiming writes and commits a secret, and the public
+        # route starts publishing its hash immediately. Discovering only
+        # afterwards that we cannot build a request leaves a live commitment
+        # that is never proved and that nothing clears.
+        endpoint_url = _origin_of(enroll_base)
+        if not endpoint_url:
+            _logger.warning(
+                "[orc_enrollment] enrollment base %r has no usable origin",
+                enroll_base)
             return
-
-        # ---- 2. Prove it -----------------------------------------------
-        body = {
-            "repo": _repo_for(),
-            "branch_slug": branch_slug,
-            "build_id": build_id,
-            "proof": secret,
-        }
-        if not body["repo"]:
+        repo = _repo_for()
+        if not repo:
             _logger.warning("[orc_enrollment] cannot derive repo from the "
                             "project's origin URL; not enrolling")
             return
 
+        # ---- 3. Prove it --------------------------------------------------
         minted = None
         for attempt in range(1, _ATTEMPTS + 1):
+            # Re-read every attempt, in its own transaction. If another worker
+            # replaced the secret after we first read it, the public route is
+            # now serving THAT one's hash — so submitting what we read the
+            # first time would fail forever. Reading again is what makes the
+            # convergent claim converge.
+            secret = claim_secret(dbname)
+            if not secret:
+                _logger.warning("[orc_enrollment] no challenge secret available")
+                return
+            body = {
+                "repo": repo,
+                "branch_slug": branch_slug,
+                "build_id": build_id,
+                "proof": secret,
+            }
             try:
                 outcome, data = _post_enrollment(enroll_base, body, attempt)
             except Exception as e:
@@ -497,11 +645,20 @@ def _run_enrollment(dbname, enroll_base):
             if outcome == "minted":
                 minted = data
                 break
-            if outcome in ("spent", "stop"):
-                if outcome == "spent":
-                    _logger.info(
-                        "[orc_enrollment] challenge already spent — another "
-                        "worker of this build enrolled it")
+            if outcome == "spent":
+                # Some worker spent this challenge. Usually a sibling of this
+                # same build, which is applying the credential right now — but
+                # NOT always, and assuming so was a real defect: if a previous
+                # boot minted and then died before writing the token back, the
+                # credential is gone and this challenge can never be spent
+                # again. Replaying it forever would leave the build silently
+                # unreconnected, which is the exact failure this feature exists
+                # to end. Clearing the secret makes the next boot start a fresh
+                # challenge instead of replaying a dead one.
+                _logger.info("[orc_enrollment] challenge already spent")
+                _forget_secret(dbname, done_key)
+                return
+            if outcome == "stop":
                 return
             if attempt < _ATTEMPTS:
                 # Bounded, because "retry on the next restart" is too weak
@@ -510,19 +667,42 @@ def _run_enrollment(dbname, enroll_base):
                 # fails. Without a retry the build stays dead until somebody
                 # restarts it by hand — reintroducing the manual step this
                 # feature removes.
-                time.sleep(_BACKOFF_SECONDS[attempt - 1])
+                time.sleep(_BACKOFF_SECONDS[min(attempt - 1,
+                                                len(_BACKOFF_SECONDS) - 1)])
 
         if not minted:
             _logger.warning("[orc_enrollment] gave up after %s attempts; the "
                             "next restart will try again", _ATTEMPTS)
             return
 
-        # ---- 3. Apply. Second short transaction. -------------------------
-        with Registry(dbname).cursor() as cr:
-            env = api.Environment(cr, SUPERUSER_ID, {})
-            _apply(env, dict(minted, endpoint_url=endpoint_url))
-            env["ir.config_parameter"].sudo().set_param(
-                _PARAM_ENROLL_DONE, done_key)
+        # The mint is spent the moment Workplace answers, so anything missing
+        # here is a credential we can never ask for again. Check before we
+        # start writing rather than half-applying and losing it.
+        if not minted.get("infrastructure_id"):
+            _logger.error(
+                "[orc_enrollment] mint response has no infrastructure_id; the "
+                "challenge is spent and this credential is lost. The next boot "
+                "will start a fresh enrollment.")
+            _forget_secret(dbname, done_key)
+            return
+
+        # ---- 4. Apply. Second short transaction. -------------------------
+        try:
+            with Registry(dbname).cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                _apply(env, dict(minted, endpoint_url=endpoint_url))
+                env["ir.config_parameter"].sudo().set_param(
+                    _PARAM_ENROLL_DONE, done_key)
+        except Exception:
+            # The credential existed only in this thread. Left alone, the next
+            # boot would replay a spent challenge, be told so, and treat that
+            # as somebody else's success — for ever. Say so loudly and clear
+            # the secret so the next boot asks for a NEW credential.
+            _logger.exception(
+                "[orc_enrollment] minted a credential but failed to store it; "
+                "starting over on the next boot")
+            _forget_secret(dbname, done_key)
+            return
         _logger.info(
             "[orc_enrollment] enrolled %s: infrastructure=%s token=...%s",
             done_key, minted.get("infrastructure_id"),

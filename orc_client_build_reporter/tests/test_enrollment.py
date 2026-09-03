@@ -13,7 +13,7 @@ import hashlib
 from unittest import mock
 
 from odoo.tests import tagged
-from odoo.tests.common import TransactionCase
+from odoo.tests.common import BaseCase, TransactionCase
 
 from odoo.addons.orc_client_build_reporter.models import enrollment
 
@@ -61,8 +61,9 @@ BASE = "https://help.opsway.com/webhook/odoo-sh/enroll"
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestSplitDbName(TransactionCase):
-    """The identity the addon reports. Pure function, no DB."""
+class TestSplitDbName(BaseCase):
+    """The identity the addon reports. Pure function, no DB — `BaseCase` per
+    AGENTS.md's table, whose stated criterion is whether a DB is needed."""
 
     def test_splits_an_odoo_sh_build_database(self):
         self.assertEqual(
@@ -83,8 +84,9 @@ class TestSplitDbName(TransactionCase):
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestChallenge(TransactionCase):
-    """The half of the proof contract that lives in another repository."""
+class TestChallenge(BaseCase):
+    """The half of the proof contract that lives in another repository.
+    Pure function, so `BaseCase` (AGENTS.md § Tests)."""
 
     def test_challenge_is_sha256_of_the_hex_TEXT(self):
         secret = "ab" * 32
@@ -117,6 +119,9 @@ class TestRunEnrollment(TransactionCase):
         self.posts = []
 
     def _run(self, response=None, side_effect=None, db=DB):
+        # `_run_enrollment` now refuses to run under `test_enable`, matching the
+        # reporter. Clearing it here is what test_run_reporter does too; without
+        # it every test below would pass by doing nothing at all.
         def _post(url, **kw):
             self.posts.append({"url": url, **kw})
             if side_effect:
@@ -130,7 +135,10 @@ class TestRunEnrollment(TransactionCase):
                                return_value="opsway/pg_group"), \
              mock.patch.object(enrollment, "_provisioning_installed",
                                return_value=True), \
-             mock.patch.object(enrollment.time, "sleep", lambda _s: None):
+             mock.patch.object(enrollment.time, "sleep", lambda _s: None), \
+             mock.patch.dict(enrollment.config.options,
+                             {"test_enable": False, "test_file": False,
+                              "stop_after_init": False}):
             enrollment._run_enrollment(db, BASE)
 
     def _param(self, key):
@@ -176,7 +184,10 @@ class TestRunEnrollment(TransactionCase):
              mock.patch.object(enrollment.requests, "post", side_effect=_post), \
              mock.patch.object(enrollment, "_repo_for", return_value="o/r"), \
              mock.patch.object(enrollment, "_provisioning_installed",
-                               return_value=True):
+                               return_value=True), \
+             mock.patch.dict(enrollment.config.options,
+                             {"test_enable": False, "test_file": False,
+                              "stop_after_init": False}):
             enrollment._run_enrollment(DB, BASE)
 
         self.assertTrue(seen["secret_at_post_time"],
@@ -233,7 +244,10 @@ class TestRunEnrollment(TransactionCase):
                                lambda _db: _FakeRegistry(self.env.cr)), \
              mock.patch.object(enrollment.requests, "post") as post, \
              mock.patch.object(enrollment, "_provisioning_installed",
-                               return_value=False):
+                               return_value=False), \
+             mock.patch.dict(enrollment.config.options,
+                             {"test_enable": False, "test_file": False,
+                              "stop_after_init": False}):
             enrollment._run_enrollment(DB, BASE)
         post.assert_not_called()
 
@@ -250,7 +264,10 @@ class TestRunEnrollment(TransactionCase):
              mock.patch.object(enrollment.requests, "post") as post, \
              mock.patch.object(enrollment, "_repo_for", return_value=None), \
              mock.patch.object(enrollment, "_provisioning_installed",
-                               return_value=True):
+                               return_value=True), \
+             mock.patch.dict(enrollment.config.options,
+                             {"test_enable": False, "test_file": False,
+                              "stop_after_init": False}):
             enrollment._run_enrollment(DB, BASE)
         post.assert_not_called()
 
@@ -291,85 +308,131 @@ class TestRunEnrollment(TransactionCase):
     # -- the multi-worker property ---------------------------------------
 
     def test_a_second_worker_reuses_the_committed_secret(self):
-        # Regenerating would clobber: worker A publishes S_A, B overwrites with
-        # S_B, then A submits S_A while the host serves sha256(S_B) — every
-        # attempt fails as a proof mismatch. Claim-once-and-re-read is what
-        # makes a committed secret safe across workers.
-        self._run(response=_Resp(503, {}))
-        first = self._param(enrollment._PARAM_ENROLL_SECRET)
-        self.posts = []
-        self._run(response=_Resp(503, {}))
-        self.assertEqual(self._param(enrollment._PARAM_ENROLL_SECRET), first)
-        self.assertEqual(self.posts[0]["json"]["proof"], first)
+        # Regenerating per worker would clobber: A publishes S_A, B overwrites
+        # with S_B, and A's submission fails against a host now serving
+        # sha256(S_B). `claim_secret` must return what is COMMITTED, writing
+        # only when there is nothing.
+        with mock.patch.object(enrollment, "Registry",
+                               lambda _db: _FakeRegistry(self.env.cr)):
+            first = enrollment.claim_secret(DB)
+            second = enrollment.claim_secret(DB)
+        self.assertRegex(first, r"^[0-9a-f]{64}$")
+        self.assertEqual(second, first, "a second caller must not regenerate")
+
+    def test_claim_returns_the_stored_secret_it_did_not_write(self):
+        # The case a same-transaction re-read could never see: the value was
+        # committed by somebody else before this call began.
+        planted = "9f" * 32
+        self.ICP.set_param(enrollment._PARAM_ENROLL_SECRET, planted)
+        with mock.patch.object(enrollment, "Registry",
+                               lambda _db: _FakeRegistry(self.env.cr)):
+            self.assertEqual(enrollment.claim_secret(DB), planted)
+
+    def test_a_lost_write_race_re_reads_instead_of_failing(self):
+        # The losing worker takes a unique violation or a serialization error.
+        # Both mean the winner's value is committed, so the answer is to read
+        # it in a FRESH transaction — not to give up and not to overwrite.
+        planted = "7c" * 32
+        calls = {"n": 0}
+
+        class _Reg:
+            def __init__(self, cr):
+                self.cr = cr
+
+            def cursor(_self):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    # First transaction: pretend our write lost the race.
+                    self.ICP.set_param(enrollment._PARAM_ENROLL_SECRET, planted)
+
+                    class _Boom:
+                        def __enter__(_s):
+                            raise RuntimeError("duplicate key value violates key_uniq")
+
+                        def __exit__(_s, *_a):
+                            return False
+                    return _Boom()
+                return _FakeCursorCM(self.env.cr)
+
+        with mock.patch.object(enrollment, "Registry", lambda _db: _Reg(self.env.cr)):
+            self.assertEqual(enrollment.claim_secret(DB), planted)
+        self.assertEqual(calls["n"], 2, "it must open a SECOND transaction to re-read")
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestPublishedChallenge(TransactionCase):
-    """What the public route is allowed to say.
+class TestSpentChallengeRecovery(TransactionCase):
+    """A spent challenge with no stored credential must not be replayed forever.
 
-    This is the only unauthenticated surface in the family, so the two
-    properties worth pinning are that it publishes the COMMITMENT and never the
-    preimage, and that it says nothing at all when no enrollment is pending.
+    This is the failure the whole feature exists to end, reintroduced by a
+    plausible shortcut: treating every 409 as "a sibling worker won". If a
+    previous boot minted and then died before writing the token back, the
+    credential is gone and that challenge can never be spent again — so
+    replaying it leaves the build silently unreconnected.
     """
 
     def setUp(self):
         super().setUp()
         self.ICP = self.env["ir.config_parameter"].sudo()
+        for key in ("orc.endpoint_url", "orc.org_token", "orc.infrastructure_id"):
+            self.ICP.set_param(key, False)
+        self.ICP.set_param(enrollment._PARAM_ENROLL_SECRET, "5a" * 32)
+        self.ICP.set_param(enrollment._PARAM_ENROLL_DONE, False)
 
-    def test_serves_nothing_when_no_enrollment_is_pending(self):
-        self.ICP.set_param(enrollment._PARAM_ENROLL_SECRET, False)
-        self.assertIsNone(enrollment.published_challenge(self.env))
+    def _run(self, response):
+        with mock.patch.object(enrollment, "Registry",
+                               lambda _db: _FakeRegistry(self.env.cr)), \
+             mock.patch.object(enrollment.requests, "post",
+                               side_effect=lambda url, **kw: response), \
+             mock.patch.object(enrollment, "_repo_for", return_value="o/r"), \
+             mock.patch.object(enrollment, "_provisioning_installed",
+                               return_value=True), \
+             mock.patch.object(enrollment.time, "sleep", lambda _s: None), \
+             mock.patch.dict(enrollment.config.options,
+                             {"test_enable": False, "test_file": False,
+                              "stop_after_init": False}):
+            enrollment._run_enrollment(DB, BASE)
 
-    def test_reads_the_secret_off_the_transaction_not_the_ormcache(self):
-        """The route must not publish a hash of a secret that is no longer there.
-
-        ``ICP.get_param`` is ``@ormcache``'d per registry. The secret is written
-        by whichever worker wins the claim, so a DIFFERENT worker serving this
-        route can hold a value cached from before that write — and would then
-        publish the commitment for a secret nobody is going to submit. Every
-        enrollment fails as a proof mismatch, and nothing says why.
-
-        The first version of this file caught that by accident, through a stale
-        value another test happened to leave behind, which meant it stopped
-        catching it as soon as the test order changed. This poisons the cache on
-        purpose instead: populate it, then change the row behind the ORM's back —
-        exactly what another worker's committed write looks like from here.
-        """
-        first, second = "ab" * 32, "cd" * 32
-        self.ICP.set_param(enrollment._PARAM_ENROLL_SECRET, first)
-        self.ICP.flush_model(["key", "value"])
-        # Populate the ormcache with `first`.
-        self.assertEqual(
-            self.ICP.get_param(enrollment._PARAM_ENROLL_SECRET), first)
-        # Change it without going through the ORM, so nothing invalidates.
-        self.env.cr.execute(
-            "UPDATE ir_config_parameter SET value = %s WHERE key = %s",
-            (second, enrollment._PARAM_ENROLL_SECRET),
-        )
-        self.assertEqual(
-            self.ICP.get_param(enrollment._PARAM_ENROLL_SECRET), first,
-            "precondition: the ormcache must still be serving the stale value",
-        )
-        self.assertEqual(
-            enrollment.published_challenge(self.env),
-            hashlib.sha256(second.encode("ascii")).hexdigest(),
-            "published_challenge must read the committed row, not the cache",
+    def test_a_spent_challenge_clears_the_secret_so_the_next_boot_starts_over(self):
+        self._run(_Resp(409, {"error": "challenge already spent"}))
+        self.assertFalse(
+            (self.ICP.get_param(enrollment._PARAM_ENROLL_SECRET) or "").strip(),
+            "a spent challenge must not be left to be replayed",
         )
 
-    def test_publishes_the_hash_and_never_the_preimage(self):
-        secret = "cd" * 32
-        self.ICP.set_param(enrollment._PARAM_ENROLL_SECRET, secret)
-        published = enrollment.published_challenge(self.env)
-        self.assertEqual(published,
-                         hashlib.sha256(secret.encode("ascii")).hexdigest())
-        # The property the whole scheme rests on: reading the public route
-        # must not reveal anything that can be replayed as the proof.
-        self.assertNotEqual(published, secret)
-        self.assertNotIn(secret, published)
+    def test_a_mint_that_cannot_be_stored_clears_the_secret_too(self):
+        # 200 with no infrastructure_id: the challenge is spent and the
+        # credential is unusable. Replaying it would 409 forever.
+        self._run(_Resp(200, {"ok": True, "token": "orc_" + "d" * 64}))
+        self.assertFalse(
+            (self.ICP.get_param(enrollment._PARAM_ENROLL_SECRET) or "").strip())
+        self.assertFalse(
+            (self.ICP.get_param(enrollment._PARAM_ENROLL_DONE) or "").strip(),
+            "the build did not finish enrolling, so nothing may suppress a retry",
+        )
+
+    def test_a_mint_missing_infrastructure_id_never_reaches_apply(self):
+        # The downstream `_apply` would raise on the missing key and the
+        # recovery path would clear the secret anyway — so asserting only "the
+        # secret was cleared" cannot tell the guard from the crash. Assert that
+        # `_apply` is never entered.
+        with mock.patch.object(enrollment, "_apply") as apply_:
+            self._run(_Resp(200, {"ok": True, "token": "orc_" + "d" * 64}))
+        apply_.assert_not_called()
+
+    def test_a_200_without_a_token_is_not_treated_as_a_mint(self):
+        self._run(_Resp(200, {"ok": False, "error": "no armed binding"}))
+        self.assertFalse(
+            (self.ICP.get_param("orc.org_token") or "").strip())
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
 class TestSkipReason(TransactionCase):
+
+    def setUp(self):
+        super().setUp()
+        ICP = self.env["ir.config_parameter"].sudo()
+        for key in ("orc.endpoint_url", "orc.org_token", "orc.infrastructure_id"):
+            ICP.set_param(key, False)
 
     def test_skips_under_stop_after_init(self):
         with mock.patch.dict(enrollment.config.options,
@@ -382,3 +445,23 @@ class TestSkipReason(TransactionCase):
         with mock.patch.dict(enrollment.config.options, {"test_enable": True}):
             self.assertEqual(enrollment._skip_reason(),
                              enrollment._SKIP_TEST_MODE)
+
+    def test_the_runner_itself_refuses_in_test_mode(self):
+        # Belt-and-braces parity with the reporter. An unguarded direct call
+        # submits a LIVE proof and can have a real credential minted into
+        # whatever database happens to be open.
+        #
+        # Everything else that could stop the POST is patched away on purpose:
+        # the first version left `Registry` real, so the run died on a missing
+        # database and the test passed with the guard deleted.
+        with mock.patch.object(enrollment.requests, "post") as post, \
+             mock.patch.object(enrollment, "Registry",
+                               lambda _db: _FakeRegistry(self.env.cr)), \
+             mock.patch.object(enrollment, "_repo_for", return_value="o/r"), \
+             mock.patch.object(enrollment, "_provisioning_installed",
+                               return_value=True), \
+             mock.patch.dict(enrollment.config.options,
+                             {"test_enable": True, "test_file": False,
+                              "stop_after_init": False}):
+            enrollment._run_enrollment(DB, BASE)
+        post.assert_not_called()

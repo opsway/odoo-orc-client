@@ -21,8 +21,14 @@
 -- a key that suppresses the first enrollment, which is exactly the moment the
 -- build needs one. Clearing it costs nothing; leaving it risks a silent
 -- non-reconnection, which is the failure this whole feature exists to end.
+-- `enroll_base` is the third, and it is the one with teeth. It decides WHERE
+-- a build submits its proof, and `orc.endpoint_url` is derived from it — so a
+-- development override restored from a dump would send a real build's proof,
+-- and all of its later API traffic, to whatever host that override names. The
+-- in-source constant is the value that should win on a restored copy.
 DELETE FROM ir_config_parameter
  WHERE key IN (
     'orc.enroll_secret',
-    'orc_client_build_reporter.enroll_done_key'
+    'orc_client_build_reporter.enroll_done_key',
+    'orc_client_build_reporter.enroll_base'
  );

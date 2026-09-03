@@ -53,9 +53,9 @@ All configuration lives in `ir.config_parameter` (read restricted to
 ## Self-enrollment on Odoo.sh staging
 
 Odoo.sh rebuilds a staging branch roughly monthly, and on every "new build"
-push. Each rebuild restores a dump and **neutralizes** it, which deletes the
-three required parameters above — so ORC goes quiet on that environment until
-somebody reconnects it by hand. The failure is silent: nothing errors, and it
+push. Each rebuild restores a dump and **neutralizes** it, which deletes the four
+`orc.*` parameters above — so ORC goes quiet on that environment until somebody
+reconnects it by hand. The failure is silent: nothing errors, and it
 is usually a person noticing the agent cannot see their staging data.
 
 With `orc_client_build_reporter` installed, a bound staging build reconnects
@@ -68,8 +68,8 @@ first, so installing the addon does not opt an environment in. Three things
 have to be true:
 
 - the database is an Odoo.sh build database (`<branch-slug>-<build-id>`);
-- the three `orc.*` parameters are missing (a configured Odoo never
-  re-enrolls);
+- any of the three required `orc.*` parameters is missing (a fully configured
+  Odoo never re-enrolls);
 - `orc_client_provisioning` is installed — otherwise there is nothing here that
   would read the credential.
 
@@ -78,5 +78,13 @@ have to be true:
 otherwise. That value is a hash of a random secret, not a credential — reading
 it grants nothing, which is the property that makes publishing it safe.
 
-Operators: nothing to configure. To watch it work, tail the log for
-`[orc_enrollment]` after a rebuild.
+Operators: nothing to configure on a hosted deployment — tail the log for
+`[orc_enrollment]` after a rebuild to watch it work.
+
+**Self-hosters** have one more constant than the reporter's `WEBHOOK_BASE`:
+`ENROLL_BASE` in `orc_client_build_reporter/models/enrollment.py`, which must
+point at your own AI Workplace. `orc.endpoint_url` is derived from it, so
+setting it wrong misdirects both the proof and every later API call. The ICP
+key `orc_client_build_reporter.enroll_base` overrides it for one-off testing
+and is deliberately deleted by neutralize, so it can never ride a dump into a
+restored copy.

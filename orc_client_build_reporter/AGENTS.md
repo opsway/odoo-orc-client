@@ -5,9 +5,10 @@ Maintainer guidance for the addon. The user-facing surface lives in
 
 ## What this addon is for, in one paragraph
 
-A daemon thread that fires once per Odoo registry init and reports
-`(sha, build_id, stage, dev_url, branch_slug, repo)` to AI Workplace's
-public webhook. Workplace routes the report to the owning organisation
+Two daemon threads off one registry-init hook. The first reports
+`(sha, build_id, stage, dev_url, branch_slug, repo)` to AI Workplace's public
+webhook. The second (see § Self-enrollment) proves this build's identity and
+RECEIVES a credential, and serves the family's only public route. Workplace routes the report to the owning organisation
 by matching `repo` against `organizations.github_repo`. The agent then
 reads from `odoo_sh_builds` to derive the right SSH target for a given
 commit.
@@ -52,12 +53,14 @@ Don't drop any of the three — the test
 
 ## Tests — which class to inherit from
 
-Two test files:
+Four test files:
 
 | File | Base class | Why |
 |---|---|---|
 | `tests/test_helpers.py` | `BaseCase` | Pure functions (parsers, git helper). No DB needed. |
 | `tests/test_run_reporter.py` | `TransactionCase` | Reads/writes `ir.config_parameter`; needs the test cursor + savepoint. |
+| `tests/test_startup_guard.py` | `TransactionCase` | Drives `_register_hook` against the registry. |
+| `tests/test_enrollment.py` | `TransactionCase` | Same as the reporter, plus it poisons the ormcache deliberately. |
 
 All tests use `@tagged('post_install', '-at_install',
 'orc_client_build_reporter')` so they're discoverable by tag and run
@@ -111,17 +114,31 @@ transaction is invisible there, so holding the transaction across the POST is
 green on one worker and dead on Odoo.sh. Same cross-cursor REPEATABLE READ
 class as the `18.0.1.13.1` orphaned-key bug.
 
-**2. The secret is claimed once and re-read, never regenerated.** That is what
-makes an early commit safe with N workers. If each worker generated its own,
-worker A would publish `S_A`, B would overwrite with `S_B`, and A's submission
-would fail against a host now serving `sha256(S_B)`. Workers therefore share
-one `S`; the race is settled server-side, where the challenge is single-use, so
-one worker mints and the rest are told it is already spent — a normal outcome,
-not an error.
+**2. Coordination is CONVERGENT, not mutually exclusive.** A worker writes a
+secret only when none is committed; one that loses the write race re-reads in a
+FRESH transaction; and every POST attempt re-reads before submitting.
 
-`test_commits_the_secret_BEFORE_posting` and
-`test_a_second_worker_reuses_the_committed_secret` pin these. Both survive a
-naive refactor toward "just do it in one transaction like the reporter".
+An earlier version used an advisory lock and re-read "under the lock". That was
+wrong, and the correction is worth keeping: Odoo cursors run at REPEATABLE
+READ, so a re-read later in the same transaction cannot see a row another
+worker committed after that transaction's first statement — measured, returns
+`<invisible>`. An `ON CONFLICT ... RETURNING` upsert is not a fix either; under
+REPEATABLE READ it raises `could not serialize access due to concurrent
+update`. Only a NEW transaction takes a new snapshot.
+
+**A spent challenge with no stored credential is not somebody else's success.**
+If a boot mints and then dies before writing the token back, that challenge can
+never be spent again — so replaying it would leave the build silently
+unreconnected for ever, which is the failure this feature exists to end. Those
+paths clear the secret so the next boot asks for a fresh credential.
+`TestSpentChallengeRecovery` pins it.
+
+**What the tests can and cannot see.** `_FakeCursorCM.__exit__` never commits,
+so commit boundaries are unobservable in `TransactionCase` — a test named for
+"commits before posting" can only pin WRITE order. Do not read
+`test_writes_the_secret_before_posting` as proof against a refactor that folds
+the POST into the first transaction; nothing in the suite can catch that, and
+it must be caught in review.
 
 ### The proof contract — pinned in prose on purpose
 
@@ -145,13 +162,17 @@ used and that the decoded-bytes form is not.
 |---|---|
 | `--stop-after-init` / test mode | same build-phase ERROR the reporter's guard prevents |
 | database name must split as `<slug>-<build_id>` | a self-hosted Odoo would ask for a token |
-| the three `orc.*` params must be missing | a working build re-enrolls on every restart, superseding the token it is using |
+| any of the three `orc.*` params missing | a working build re-enrolls on every restart, superseding the token it is using |
 | `orc_client_provisioning` must be installed | a real credential minted into parameters nothing reads |
 | `enroll_done_key` matches this build | re-enrolling in a loop against whatever is deleting the config, instead of surfacing it |
 
 ### `data/neutralize.sql`
 
-Deletes `orc.enroll_secret` and the debounce key. Auto-discovered by
+Deletes `orc.enroll_secret`, `orc_client_build_reporter.enroll_done_key` and
+`orc_client_build_reporter.enroll_base` — the last decides where a proof is
+SENT, so a restored development override would aim a real build's proof at it.
+(`last_report_key`, the reporter's own debounce, is deliberately left alone.)
+Auto-discovered by
 `odoo.modules.neutralize` — it is **not** listed in the manifest's `data`. The
 secret is a live proof of ownership; carrying one into a restored copy hands
 that copy what it needs to obtain a credential.
