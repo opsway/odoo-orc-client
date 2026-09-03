@@ -89,14 +89,91 @@ The only thing intentionally NOT covered is the live webhook POST —
 the assumption is that the addon is exercised in production by
 merely existing.
 
+## Self-enrollment (`models/enrollment.py`)
+
+A second daemon thread off the same `_register_hook`. Where the reporter says
+"here is what I am", enrollment says "here is proof I am, please give me a
+credential" — so an Odoo.sh staging build that a rebuild neutralized
+reconnects itself instead of waiting for an operator.
+
+**This addon now receives a secret.** The "nothing to log-redact" note above
+remains true of the *report*; it is no longer true of the module. The minted
+token is logged only as its last six characters, and the preimage is never
+logged.
+
+### The two invariants that are easy to break
+
+**1. The secret is committed BEFORE the POST** — the opposite of the
+reporter's one-transaction claim/post/stamp, and not a style difference. AI
+Workplace calls back into this Odoo, onto an arbitrary worker over a different
+connection, to read the published challenge. A secret still inside the posting
+transaction is invisible there, so holding the transaction across the POST is
+green on one worker and dead on Odoo.sh. Same cross-cursor REPEATABLE READ
+class as the `18.0.1.13.1` orphaned-key bug.
+
+**2. The secret is claimed once and re-read, never regenerated.** That is what
+makes an early commit safe with N workers. If each worker generated its own,
+worker A would publish `S_A`, B would overwrite with `S_B`, and A's submission
+would fail against a host now serving `sha256(S_B)`. Workers therefore share
+one `S`; the race is settled server-side, where the challenge is single-use, so
+one worker mints and the rest are told it is already spent — a normal outcome,
+not an error.
+
+`test_commits_the_secret_BEFORE_posting` and
+`test_a_second_worker_reuses_the_committed_secret` pin these. Both survive a
+naive refactor toward "just do it in one transaction like the reporter".
+
+### The proof contract — pinned in prose on purpose
+
+The verifying half lives in `opsway/odoo-agent-gateway` with **no shared
+code**, so both sides carry the same three lines:
+
+```
+S          64 lowercase hex characters (32 random bytes)
+challenge  sha256 of the ASCII BYTES OF THAT HEX STRING, lowercase hex
+published  GET /orc/enroll/challenge -> {"challenge": "<64 lowercase hex>"}
+```
+
+Hashing the hex **text** rather than the 32 decoded bytes is deliberate: there
+is no decoding step for a reimplementation to disagree about.
+`test_challenge_is_sha256_of_the_hex_TEXT` asserts both that the text form is
+used and that the decoded-bytes form is not.
+
+### Guards, and why each exists
+
+| Guard | Without it |
+|---|---|
+| `--stop-after-init` / test mode | same build-phase ERROR the reporter's guard prevents |
+| database name must split as `<slug>-<build_id>` | a self-hosted Odoo would ask for a token |
+| the three `orc.*` params must be missing | a working build re-enrolls on every restart, superseding the token it is using |
+| `orc_client_provisioning` must be installed | a real credential minted into parameters nothing reads |
+| `enroll_done_key` matches this build | re-enrolling in a loop against whatever is deleting the config, instead of surfacing it |
+
+### `data/neutralize.sql`
+
+Deletes `orc.enroll_secret` and the debounce key. Auto-discovered by
+`odoo.modules.neutralize` — it is **not** listed in the manifest's `data`. The
+secret is a live proof of ownership; carrying one into a restored copy hands
+that copy what it needs to obtain a credential.
+
+### The public route
+
+`/orc/enroll/challenge` is the family's only `auth="public"` route. It serves
+one commitment and nothing else, with `save_session=False` so an
+unauthenticated poll cannot mint session rows, and `no-store` because the
+secret is deleted the moment enrollment succeeds.
+
 ## Compatibility / non-goals
 
 - One repo per Odoo.sh project (1:1). Multi-repo not supported.
 - The addon may live in the customer repo *or* as a submodule of it;
   both report the customer repo (see `get_project_root`).
-- No retries — if the POST fails, the next restart re-attempts. The
-  `last_report_key` debounce ensures one post per
-  `{sha}:{build_id}:{stage}`.
+- No retries **in the reporter** — if the POST fails, the next restart
+  re-attempts. The `last_report_key` debounce ensures one post per
+  `{sha}:{build_id}:{stage}`. Enrollment does retry (3 bounded attempts),
+  because Workplace calls back seconds after registry init and a frontend
+  that is not serving yet would otherwise leave the build unreconnected
+  until somebody restarts it by hand — the manual step the feature removes.
 - Manifest version follows the family's
   `<odoo>.<feature>.<minor>.<patch>` scheme.
 

@@ -1,10 +1,11 @@
 {
     "name": "AI Workplace — Build Reporter",
-    "version": "18.0.1.3.0",
+    "version": "18.0.1.4.0",
     "summary": (
         "Phones home to AI Workplace on every Odoo.sh registry init so the"
         " developer-flow agent can resolve `(commit sha → build_id, dev"
-        " URL, ssh target)` without any GitHub token."
+        " URL, ssh target)` without any GitHub token — and lets a recycled"
+        " staging build reconnect itself afterwards."
     ),
     "description": """
 AI Workplace — Build Reporter

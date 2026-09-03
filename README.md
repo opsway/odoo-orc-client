@@ -48,3 +48,35 @@ All configuration lives in `ir.config_parameter` (read restricted to
 | `orc.infrastructure_id` | yes | UUID of this Odoo instance in ORC |
 | `orc.rotation_days` | no (default 30) | Odoo API key rotation interval |
 | `orc.sync_interval_minutes` | no (default 5) | Phase 2 poll cadence |
+| `orc.enroll_secret` | never set by hand | written and deleted by self-enrollment; see below |
+
+## Self-enrollment on Odoo.sh staging
+
+Odoo.sh rebuilds a staging branch roughly monthly, and on every "new build"
+push. Each rebuild restores a dump and **neutralizes** it, which deletes the
+three required parameters above — so ORC goes quiet on that environment until
+somebody reconnects it by hand. The failure is silent: nothing errors, and it
+is usually a person noticing the agent cannot see their staging data.
+
+With `orc_client_build_reporter` installed, a bound staging build reconnects
+itself. It publishes a one-time commitment on a public read-only route, proves
+it holds the preimage, and writes back the credential ORC mints — then
+re-enables the two ORC crons that neutralize switched off.
+
+Nothing happens unless an operator has **armed** that branch on the ORC side
+first, so installing the addon does not opt an environment in. Three things
+have to be true:
+
+- the database is an Odoo.sh build database (`<branch-slug>-<build-id>`);
+- the three `orc.*` parameters are missing (a configured Odoo never
+  re-enrolls);
+- `orc_client_provisioning` is installed — otherwise there is nothing here that
+  would read the credential.
+
+**What is exposed publicly:** `GET /orc/enroll/challenge` returns
+`{"challenge": "<sha256 hex>"}` while an enrollment is pending, and 404
+otherwise. That value is a hash of a random secret, not a credential — reading
+it grants nothing, which is the property that makes publishing it safe.
+
+Operators: nothing to configure. To watch it work, tail the log for
+`[orc_enrollment]` after a rebuild.
