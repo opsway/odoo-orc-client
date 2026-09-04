@@ -376,57 +376,6 @@ def claim_secret(dbname):
             return None
 
 
-def _params(cr, keys):
-    """Read parameters straight off the transaction.
-
-    Deliberately not ``ICP.get_param``: that is ``@ormcache``'d on the key, so
-    it can hand back a value this process cached before another worker wrote a
-    different one — exactly the staleness the lock exists to eliminate.
-    """
-    cr.execute(
-        "SELECT key, value FROM ir_config_parameter WHERE key = ANY(%s)",
-        (list(keys),),
-    )
-    return {k: (v or "").strip() for k, v in cr.fetchall()}
-
-
-def _flush_params(env):
-    """Push pending ORM writes down so a raw SELECT can see them.
-
-    Core's own ``_get_param`` does the same. Without it a ``set_param`` made
-    earlier in this transaction is invisible to ``_params``.
-    """
-    env["ir.config_parameter"].sudo().flush_model(["key", "value"])
-
-
-def _provisioning_installed(env):
-    """Is there anything here that would READ the credential we are asking for?
-
-    Enrolling without ``orc_client_provisioning`` would mint a real token and
-    park it in parameters nothing reads — a live credential created for no
-    reason, which is the kind of thing that is only ever discovered during an
-    incident.
-    """
-    return bool(env["ir.module.module"].sudo().search_count([
-        ("name", "=", "orc_client_provisioning"),
-        ("state", "=", "installed"),
-    ]))
-
-
-def _needs_enrollment(cfg):
-    """True when this Odoo cannot talk to AI Workplace.
-
-    The same three parameters ``orc.client._config`` requires. Enrollment is a
-    REPAIR, not a provisioning path: a configured build must never re-enroll,
-    because that would mint a fresh token and supersede the working one on
-    every restart.
-    """
-    return not all(
-        cfg.get(k) for k in
-        ("orc.endpoint_url", "orc.org_token", "orc.infrastructure_id")
-    )
-
-
 def _forget_secret(dbname, done_key):
     """Drop the challenge secret so the next boot starts a fresh enrollment.
 

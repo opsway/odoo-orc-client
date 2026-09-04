@@ -42,7 +42,7 @@ System Parameters**:
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `orc_client_tasks.embed_theme` | `dark` / `light` | `dark` | Theme applied to the embedded chat iframe. The orc-app reads `?theme=` from the iframe URL and toggles its dark class before paint, so the embed matches the host Odoo's theme without a runtime postMessage handshake. Anything other than `dark` / `light` falls back to the default. |
+| `orc_client_tasks.embed_theme` | `dark` / `light` | `light` | Theme applied to the embedded chat iframe. The orc-app reads `?theme=` from the iframe URL and toggles its dark class before paint, so the embed matches the host Odoo's theme without a runtime postMessage handshake. Anything other than `dark` / `light` falls back to the default. |
 
 Static parameter for now — set it once per Odoo install. A
 follow-up could read the host theme dynamically and re-emit
