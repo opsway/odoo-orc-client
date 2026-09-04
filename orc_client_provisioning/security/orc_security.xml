@@ -5,4 +5,20 @@
         <field name="category_id" ref="base.module_category_administration"/>
         <field name="comment">Can enable / disable AI Workplace access for users and inspect the audit log.</field>
     </record>
+
+    <!--
+        Nothing else grants this group, and everything the addon puts in the UI
+        is gated on it: the AI Workplace page on the user form, both menus, and
+        read access to the audit log. Without this record the addon installs
+        successfully and is then completely invisible, including to the admin
+        who installed it — which is how it shipped on 15.0 until now.
+
+        Granted through `base.group_system` rather than by naming users, so it
+        covers admins created later too. The group sits alone in its own
+        category, so this shows up as one extra checkbox in Access Rights and
+        does not disturb Odoo's Administration selector.
+    -->
+    <record id="base.group_system" model="res.groups">
+        <field name="implied_ids" eval="[(4, ref('orc_client_provisioning.group_orc_manager'))]"/>
+    </record>
 </odoo>

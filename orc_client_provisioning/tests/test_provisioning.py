@@ -574,3 +574,78 @@ class TestOrcProvisioning(TransactionCase):
         # Gateway identity uses qualified email; Odoo API auth uses bare login.
         self.assertEqual(push_calls[0]["email"], "admin_test_orc@myco.odoo.com")
         self.assertEqual(push_calls[0]["odoo_login"], "admin_test_orc")
+
+
+class TestOrcManagerGroupIsGranted(TransactionCase):
+    """The addon must not install invisible.
+
+    Everything this addon puts in the UI is gated on
+    ``group_orc_manager``: the AI Workplace page on the user form, both
+    menus, and read access to the audit log. Nothing else grants that group,
+    so without the ``base.group_system`` implication in
+    ``security/orc_security.xml`` the addon installs successfully and is then
+    unreachable — including for the admin who installed it, who has no way to
+    discover why. That is how it shipped on the 15.0 branch, and a green
+    suite said nothing about it.
+
+    On v15 a group the user lacks does not remove the node: ``_apply_groups``
+    sets ``invisible="1"`` on it and drops the ``groups`` attribute
+    (``ir_ui_view.py``). So the assertions below read the modifier, not the
+    presence of the tag — checking for the tag passes either way and is the
+    trap that let this through.
+    """
+
+    PAGE = 'name="orc_access"'
+
+    def _page_is_visible(self, user):
+        arch = self.env(user=user.id)["res.users"].fields_view_get(
+            view_id=self.env.ref("base.view_users_form").id,
+            view_type="form",
+        )["arch"]
+        start = arch.index("<page")
+        while start != -1:
+            end = arch.index(">", start) + 1
+            tag = arch[start:end]
+            if self.PAGE in tag:
+                return 'invisible="1"' not in tag
+            start = arch.find("<page", end)
+        raise AssertionError("the AI Workplace page is not in the arch at all")
+
+    def test_a_settings_admin_gets_the_manager_group(self):
+        admin = self.env.ref("base.user_admin")
+        self.assertTrue(admin.has_group("base.group_system"))
+        self.assertTrue(
+            admin.has_group("orc_client_provisioning.group_orc_manager"),
+            "base.group_system must imply group_orc_manager, or the addon is "
+            "invisible to every user on a fresh install",
+        )
+
+    def test_the_user_form_page_is_visible_to_an_admin(self):
+        self.assertTrue(self._page_is_visible(self.env.ref("base.user_admin")))
+
+    def test_the_user_form_page_stays_hidden_from_a_plain_user(self):
+        # The other half: granting it to Settings must not grant it to
+        # everybody. This is what makes the gate still worth having.
+        plain = self.env["res.users"].create({
+            "name": "Plain Internal",
+            "login": "orc_plain_internal_for_group_test",
+            "groups_id": [(6, 0, [self.env.ref("base.group_user").id])],
+        })
+        self.assertFalse(
+            plain.has_group("orc_client_provisioning.group_orc_manager"))
+        self.assertFalse(self._page_is_visible(plain))
+
+    def test_the_menus_follow_the_same_group(self):
+        admin = self.env.ref("base.user_admin")
+        plain = self.env["res.users"].create({
+            "name": "Plain Internal 2",
+            "login": "orc_plain_internal_for_menu_test",
+            "groups_id": [(6, 0, [self.env.ref("base.group_user").id])],
+        })
+        Menu = self.env["ir.ui.menu"]
+        self.assertTrue(
+            Menu.with_user(admin).search([("name", "ilike", "AI Workplace")]),
+            "an admin must be able to reach the AI Workplace menus",
+        )
+        self.assertFalse(
+            Menu.with_user(plain).search([("name", "ilike", "AI Workplace")]))
