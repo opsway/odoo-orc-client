@@ -114,19 +114,47 @@ class OrcClientConfig(models.AbstractModel):
         return True
 
     @api.model
-    def provision_user(self, *, email: str, name: str, role: str = "user") -> str:
-        """Create the user + membership in AI Workplace. Returns user_id.
+    def provision_user(
+        self,
+        *,
+        odoo_login: str,
+        name: str,
+        email: str | None = None,
+    ) -> str:
+        """Create the org_user in AI Workplace. Returns user_id.
 
-        Password is random and never shown — the user will only ever
-        sign in via SSO handoff. Synapse holds the hash but no login
-        path on the Odoo side ever issues it.
+        Two-namespace contract (gateway plan §3 + §9):
+
+          - ``odoo_login`` is the per-org identity key (the gateway
+            stores it on ``users.odoo_login`` and matches the Odoo
+            iframe SSO requests against it).  May or may not contain
+            an ``@``; the gateway takes it verbatim because Odoo
+            ``res.users.login`` is case-sensitive and may be a bare
+            string like ``"admin"``.
+          - ``email`` is optional metadata.  When set, the gateway
+            stamps it on ``users.email`` for display; not used as a
+            lookup key.  Pass it alongside ``odoo_login`` so the AI
+            Workplace UI can render a recognisable email column.
+
+        The addon always provisions ``role='member'`` server-side —
+        admins are platform_user identities granted via the AI
+        Workplace dashboard's invite flow, not by Odoo (plan §9.1).
+        We don't pass a ``role`` field at all; the server defaults
+        to member and rejects ``role='admin'`` on this path.
+
+        Password is random and never shown — the user signs in via
+        the SSO handoff.  Synapse holds the hash but no login path
+        on the Odoo side ever issues it.
         """
         password = secrets.token_urlsafe(32)
-        data = self._request(
-            "POST",
-            "/api/admin/users",
-            json_body={"email": email, "name": name, "role": role, "password": password},
-        )
+        body: dict = {
+            "odoo_login": odoo_login,
+            "name": name,
+            "password": password,
+        }
+        if email:
+            body["email"] = email
+        data = self._request("POST", "/api/admin/users", json_body=body)
         user_id = data.get("user_id")
         if not user_id:
             raise UserError(_("AI Workplace provisioning returned no user_id"))
@@ -162,6 +190,34 @@ class OrcClientConfig(models.AbstractModel):
             "/api/auth/setup-key",
             acting_user=email,
             json_body=body,
+        )
+
+    @api.model
+    def set_read_only(self, *, email: str, read_only: bool, acting_user: str) -> dict:
+        """Set a user's read-only posture in AI Workplace.
+
+        The ONLY outbound carrier of this flag, and it fires only from an
+        explicit user action on the form — never from the reconcile or
+        provision payloads. That distinction is the whole design: AI
+        Workplace stays the single source of truth, Odoo keeps a pull-only
+        cache, and nothing periodically re-asserts a local copy (which is
+        what used to clobber dashboard-set state).
+
+        ``acting_user`` is the ADMIN performing the change; AI Workplace
+        resolves it to a real user and evaluates that human's permission,
+        so this is not a machine acting with borrowed authority. It must be
+        a gateway identity the dashboard already knows — pass
+        ``_orc_gateway_identity()``, the same derivation the other calls
+        use. An admin who is not provisioned there (or who lacks the
+        org-admin permission) gets a 401/403, which surfaces to the user.
+
+        ``email`` is the TARGET's gateway identity, same derivation.
+        """
+        return self._request(
+            "POST",
+            "/api/addon/user-access",
+            acting_user=acting_user,
+            json_body={"target_user": email, "read_only": bool(read_only)},
         )
 
     @api.model
@@ -209,10 +265,15 @@ class OrcClientConfig(models.AbstractModel):
             "X-Browser-User-Agent": browser_user_agent,
             "X-Browser-IP": browser_ip,
         }
+        # Send the identity as `odoo_login` (verbatim) so orc-app matches
+        # users.odoo_login case-sensitively. The legacy `email` field is
+        # lowercased server-side before the lookup, which silently fails
+        # for Odoo logins with uppercase chars (e.g. "Admin@host"). Keep
+        # `email` for older orc-app builds that only read that field.
         return self._request(
             "POST",
             "/api/addon/sso-exchange",
-            json_body={"email": email},
+            json_body={"odoo_login": email, "email": email},
             extra_headers=extra,
         )
 
@@ -230,9 +291,18 @@ class OrcClientConfig(models.AbstractModel):
         in ``res.users._cron_orc_reconcile`` relies on for both
         directions of drift detection.
 
-        Response shape: ``{ok, users: [{email, name, role}]}``. The
-        legacy ``infrastructures`` field on the org-scoped endpoint
+        Response shape: ``{ok, users: [{email, name, role, read_only}]}``.
+        The legacy ``infrastructures`` field on the org-scoped endpoint
         is intentionally not surfaced here; reconcile only needs the
         per-infra user set.
+
+        ``read_only`` mirrors AI Workplace's per-key access posture and is
+        **optional** — a gateway older than this field simply omits it.
+        Consumers must treat "absent" as unknown and preserve whatever
+        they hold rather than defaulting to False; see
+        ``res.users._orc_mirror_read_only``. THIS response is pull-only —
+        nothing derived from it is ever sent back through the reconcile or
+        provision payloads. Authoring a change is a separate, explicit call
+        (``set_read_only``) made only on user action.
         """
         return self._request("GET", "/api/addon/infrastructure-users")

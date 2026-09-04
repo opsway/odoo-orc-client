@@ -28,13 +28,19 @@ class EmbeddingProviderError(Exception):
 
 
 class EmbeddingProvider:
-    """Stateless provider — instances are cheap. Construct per-call
-    with the values from the global config row.
+    """Near-stateless provider — instances are cheap. Construct
+    per-call with the values from the global config row.
 
     ``embed(texts)`` returns one float32 vector per input text, in
     order. Vectors are L2-normalised by the provider class so the
     semantic-search method can use a plain dot product instead of
     re-normalising on every query.
+
+    The one piece of state is ``last_usage_tokens``: what the upstream
+    reported billing for the most recent ``embed`` call, or None if it
+    said nothing. The cron reads it to charge the daily cap, and falls
+    back to an estimate when it's None — so a provider that omits
+    usage costs accuracy, not enforcement.
     """
 
     name: str = "base"
@@ -55,6 +61,7 @@ class EmbeddingProvider:
         self.dim = dim
         self.timeout_connect = timeout_connect
         self.timeout_read = timeout_read
+        self.last_usage_tokens: Optional[int] = None
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one L2-normalised float32 vector per input text."""
