@@ -94,6 +94,40 @@ class SemanticSearchContractTests(TransactionCase):
             return_value=self.provider,
         )
 
+    def _seed_extra_embeddings(self, count):
+        """Pad the corpus past the 50-result clamp.
+
+        One article per embedding row: ``orc.embedding`` carries
+        ``UNIQUE (model, res_id)``, so the rows need distinct records.
+        """
+        Article = self.env["knowledge.article"]
+        articles = Article.create([
+            {"name": "Filler %d" % i, "body": "<p>f%d</p>" % i}
+            for i in range(count)
+        ])
+        # The create-hook enqueued a queue row per article; drop them so
+        # the cron doesn't fight us, exactly as setUp does.
+        self.env["orc.embedding.queue"].search([]).unlink()
+
+        self.env["orc.embedding"].create([
+            {
+                "model": "knowledge.article", "res_id": art.id,
+                # Mostly off the query axis, so each filler scores a
+                # small POSITIVE cosine (0.07 down to 0.002). That puts
+                # every filler above setUp's a2 (0.0) and a3 (-1.0) and
+                # below a1 (1.0) — so a ranking test cannot reuse this
+                # helper and still expect a2/a3 in the top results.
+                "vector_blob": _norm(
+                    [0.1, 1.0, float(i + 1), 0.0],
+                ).tobytes(),
+                "content_hash": "f%d" % i,
+                "indexed_at": "2026-05-07 00:00:00",
+                "provider": "openai:text-embedding-3-small",
+                "text_excerpt_len": 10,
+            }
+            for i, art in enumerate(articles)
+        ])
+
     def test_returns_refs_only(self):
         # No title, no snippet, no body — the README's permission
         # claim depends on this. If a future change starts leaking
@@ -134,11 +168,21 @@ class SemanticSearchContractTests(TransactionCase):
     def test_clamps_limit_to_max(self):
         # Per README, limit caps at 50. A request for 1000 should
         # silently clamp, not raise.
+        #
+        # The corpus has to EXCEED the clamp for this to mean anything.
+        # This test used to run against setUp's three embeddings and
+        # assert `<= 50`, which holds whether or not the clamp exists —
+        # deleting it left the test green. Seed past the ceiling and
+        # assert the exact count instead.
+        self._seed_extra_embeddings(60)
+        corpus = self.env["orc.embedding"].search_count([])
+        self.assertGreater(corpus, 50, "corpus must exceed the clamp")
+
         with self._patch_provider():
             out = self.env["orc.embedding"].semantic_search(
                 "anything", limit=1000,
             )
-        self.assertLessEqual(len(out), 50)
+        self.assertEqual(len(out), 50)
 
     def test_models_filter_restricts_corpus(self):
         with self._patch_provider():
