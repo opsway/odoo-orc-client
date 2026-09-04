@@ -150,7 +150,10 @@ class TestOrcClientTasksExt(TransactionCase):
                    new=fake_request):
             self.env["orc.client"].mint_sso_nonce(email="alice@acme.test")
 
-        self.assertEqual(captured["json_body"], {"email": "alice@acme.test"})
+        self.assertEqual(
+            captured["json_body"],
+            {"odoo_login": "alice@acme.test", "email": "alice@acme.test"},
+        )
         self.assertNotIn("return_to", captured["json_body"])
 
     def test_mint_sso_nonce_with_return_to_passes_field(self):
@@ -164,16 +167,34 @@ class TestOrcClientTasksExt(TransactionCase):
                    new=fake_request):
             self.env["orc.client"].mint_sso_nonce(
                 email="alice@acme.test",
-                return_to="/dashboard/tasks/%21abc%3Ahost?embed=1",
+                return_to="/tasks/%21abc%3Ahost?embed=1",
             )
 
         self.assertEqual(
             captured["json_body"],
             {
+                "odoo_login": "alice@acme.test",
                 "email": "alice@acme.test",
-                "return_to": "/dashboard/tasks/%21abc%3Ahost?embed=1",
+                "return_to": "/tasks/%21abc%3Ahost?embed=1",
             },
         )
+
+    def test_mint_sso_nonce_sends_uppercase_identity_verbatim_as_odoo_login(self):
+        """orc-app lowercases the legacy `email` field before the exact
+        users.odoo_login lookup, so an uppercase Odoo login (provisioned
+        verbatim, e.g. "Admin@host") would miss. The identity must ride
+        in `odoo_login`, passed through case-preserving."""
+        captured = {}
+
+        def fake_request(self_, method, path, **kwargs):
+            captured["json_body"] = kwargs.get("json_body")
+            return {"ok": True, "nonce": "n6", "url": "https://orc.test/auth/sso"}
+
+        with patch("odoo.addons.orc_client_provisioning.services.orc_client.OrcClientConfig._request",
+                   new=fake_request):
+            self.env["orc.client"].mint_sso_nonce(email="Admin@myco.odoo.com")
+
+        self.assertEqual(captured["json_body"]["odoo_login"], "Admin@myco.odoo.com")
 
     # -------------------------------------------------- mint_sso_nonce (lang)
 
@@ -256,15 +277,29 @@ class TestOrcClientTasksExt(TransactionCase):
     # toggles the dark class before paint
     # (see opsway/odoo-agent-gateway#85).
 
-    def test_embed_return_to_appends_dark_when_param_unset(self):
-        # Default behaviour — no admin override → dark, since the
-        # ORC dashboard is dark by default and the addon is meant
-        # to match that out of the box.
+    def test_embed_return_to_uses_the_seeded_theme(self):
+        # Out of the box the addon seeds `orc_client_tasks.embed_theme` to
+        # `light` (data/ir_config_parameter.xml) and EMBED_THEME_DEFAULT is
+        # `light` too, so an untouched install embeds light.
+        #
+        # This assertion used to read `dark`, and had done since before the
+        # default was flipped — it passed only where the seed data had not
+        # been loaded. Asserting the value the addon actually ships is the
+        # point of the test.
         room_id = "!abc:host"
         url = self.env["orc.client"]._build_embed_return_to(room_id)
         self.assertEqual(
-            url, "/dashboard/tasks/%21abc%3Ahost?embed=1&theme=dark",
+            url, "/tasks/%21abc%3Ahost?embed=1&theme=light",
         )
+
+    def test_embed_return_to_falls_back_when_the_param_is_absent(self):
+        # The seed row is what is normally read; delete it and the in-source
+        # default has to carry the call on its own.
+        self.env["ir.config_parameter"].sudo().set_param(
+            "orc_client_tasks.embed_theme", False,
+        )
+        url = self.env["orc.client"]._build_embed_return_to("!abc:host")
+        self.assertTrue(url.endswith("&theme=light"), url)
 
     def test_embed_return_to_appends_light_when_admin_sets_light(self):
         self.env["ir.config_parameter"].sudo().set_param(
@@ -273,16 +308,16 @@ class TestOrcClientTasksExt(TransactionCase):
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
         self.assertTrue(url.endswith("&theme=light"), url)
 
-    def test_embed_return_to_falls_back_to_dark_on_garbage_value(self):
+    def test_embed_return_to_coerces_a_garbage_value_to_the_default(self):
         # Defensive: an admin who fat-fingers `orange` shouldn't
         # send a garbage param to ORC (which would silently leave
         # the SSR cookie default in place — bad UX). Coerce to
-        # the documented default.
+        # the documented default, which is `light`.
         self.env["ir.config_parameter"].sudo().set_param(
             "orc_client_tasks.embed_theme", "orange",
         )
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
-        self.assertTrue(url.endswith("&theme=dark"), url)
+        self.assertTrue(url.endswith("&theme=light"), url)
 
     def test_embed_return_to_percent_encodes_room_id(self):
         # `:` and `!` must be percent-encoded so the path component

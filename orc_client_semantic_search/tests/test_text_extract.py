@@ -16,7 +16,7 @@ from odoo.addons.orc_client_semantic_search.utils.text_extract import (
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
 class HtmlStripTests(TransactionCase):
     def test_collapses_visible_text(self):
-        # The dominant input shape — knowledge.article body fragments.
+        # The dominant input shape — document.page content fragments.
         out = html_strip("<h1>Title</h1><p>Hello <b>world</b>.</p>")
         self.assertIn("Title", out)
         self.assertIn("Hello world.", out)

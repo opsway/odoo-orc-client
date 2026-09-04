@@ -13,7 +13,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werkzeug.wrappers.Response:
-    """Inline-HTML error response. Odoo 18 no longer ships a
+    """Inline-HTML error response. Neither v15 nor v18 ships a
     ``web.http_error`` QWeb template, so rendering via xmlid 500s. Keep
     this page dependency-free and styled with inline CSS — the
     AI Workplace team can't count on the client's custom
@@ -136,7 +136,7 @@ class OrcSsoController(http.Controller):
 
         try:
             data = request.env["orc.client"].sudo().mint_sso_nonce(
-                email=user._orc_effective_email(),
+                email=user._orc_gateway_identity(),
                 browser_user_agent=browser_ua,
                 browser_ip=browser_ip,
             )

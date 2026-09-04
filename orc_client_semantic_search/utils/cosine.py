@@ -7,7 +7,7 @@ normalises before returning). Search-time cosine then collapses to
 a plain dot product, which lets us write the whole top-K query as
 five lines of numpy.
 
-The corpus we expect (knowledge.article + a few helpdesk/attachment
+The corpus we expect (document.page + a few helpdesk/attachment
 models per tenant) sits comfortably under 100K vectors, where
 brute force is ~50ms per query. ANN backends (FAISS, hnswlib) are
 explicitly out of scope for v1 — see README "Limits".

@@ -61,10 +61,16 @@ class OrcEmbeddingConfigSingletonTests(TransactionCase):
     def test_global_row_must_not_set_model_name(self):
         # Catches mis-configuration: a "global" row with a model_name
         # would be ambiguous (provider config or per-model toggle?).
+        #
+        # Deliberately a model NO config row already claims. Reusing the
+        # indexed model's name makes the SQL `UNIQUE (model_name)` fire on
+        # flush before `_check_row_kind_fields` is ever reached, so the test
+        # passes on an IntegrityError and proves nothing about the Python
+        # constraint it is named after.
         Config = self.env["orc.embedding.config"]
         existing = Config.search([("is_global", "=", True)], limit=1)
         with self.assertRaises(ValidationError):
-            existing.write({"model_name": "document.page"})
+            existing.write({"model_name": "res.partner"})
 
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
@@ -78,6 +84,26 @@ class OrcEmbeddingConfigPerModelTests(TransactionCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows.text_field_path, "content")
         self.assertEqual(rows.text_extractor, "html_strip")
+        # Category pages are excluded on purpose: their `content` is generated
+        # from their children by `_compute_content`, so it is not authored text
+        # and it changes without any write landing on the category itself —
+        # nothing would ever re-enqueue it. See the data file's comment.
+        self.assertEqual(rows.index_domain, '[("type", "=", "content")]')
+
+    def test_a_category_page_is_out_of_scope_by_default(self):
+        # The behaviour the domain above buys, asserted through the one
+        # predicate every caller routes through.
+        Page = self.env["document.page"]
+        cfg = self.env["orc.embedding.config"].search([
+            ("is_global", "=", False), ("model_name", "=", "document.page"),
+        ], limit=1)
+        category = Page.create({"name": "Handbook", "type": "category"})
+        article = Page.create({
+            "name": "Onboarding", "type": "content",
+            "content": "<p>real prose</p>", "parent_id": category.id,
+        })
+        in_scope = cfg._filter_indexable(category | article)
+        self.assertEqual(in_scope, article)
 
     def test_per_model_row_must_have_model_name(self):
         Config = self.env["orc.embedding.config"]

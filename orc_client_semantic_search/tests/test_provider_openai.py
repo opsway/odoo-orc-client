@@ -141,3 +141,72 @@ class OpenAIProviderErrorPathTests(TransactionCase):
         ):
             with self.assertRaises(EmbeddingProviderError):
                 p.embed(["x"])
+
+    # ------------------------------------------- reported usage
+
+    def test_reports_usage_on_success(self):
+        p = _make_provider(dim=4)
+        payload = {
+            "data": [{"index": 0, "embedding": [1.0, 0.0, 0.0, 0.0]}],
+            "usage": {"prompt_tokens": 9, "total_tokens": 9},
+        }
+        with patch(
+            "odoo.addons.orc_client_semantic_search.providers.openai.requests.post",
+            return_value=_FakeResponse(200, payload),
+        ):
+            p.embed(["x"])
+        self.assertEqual(p.last_usage_tokens, 9)
+
+    def test_reports_none_when_the_endpoint_omits_usage(self):
+        # Optional across the OpenAI-compatible ecosystem. Absence is
+        # normal, and the cron estimates instead of refusing.
+        p = _make_provider(dim=4)
+        payload = {"data": [{"index": 0, "embedding": [1.0, 0.0, 0.0, 0.0]}]}
+        with patch(
+            "odoo.addons.orc_client_semantic_search.providers.openai.requests.post",
+            return_value=_FakeResponse(200, payload),
+        ):
+            p.embed(["x"])
+        self.assertIsNone(p.last_usage_tokens)
+
+    def test_reports_usage_even_when_the_payload_is_malformed(self):
+        # A 200 carrying usage but no `data` was billed all the same.
+        # Capturing usage only after validating `data` would make this
+        # class of failure look free, and the cron charges failures
+        # from exactly this attribute — so an endpoint failing this way
+        # could be retried past the daily cap indefinitely.
+        p = _make_provider(dim=4)
+        with patch(
+            "odoo.addons.orc_client_semantic_search.providers.openai.requests.post",
+            return_value=_FakeResponse(200, {"usage": {"total_tokens": 77}}),
+        ):
+            with self.assertRaises(EmbeddingProviderError):
+                p.embed(["x"])
+        self.assertEqual(p.last_usage_tokens, 77)
+
+    def test_reports_usage_even_on_a_dimension_mismatch(self):
+        p = _make_provider(dim=4)
+        payload = {
+            "data": [{"index": 0, "embedding": [0.0] * 8}],
+            "usage": {"total_tokens": 55},
+        }
+        with patch(
+            "odoo.addons.orc_client_semantic_search.providers.openai.requests.post",
+            return_value=_FakeResponse(200, payload),
+        ):
+            with self.assertRaises(EmbeddingProviderError):
+                p.embed(["x"])
+        self.assertEqual(p.last_usage_tokens, 55)
+
+    def test_a_stale_usage_value_is_cleared_before_each_call(self):
+        # Otherwise a network failure — which costs nothing — would be
+        # charged whatever the previous successful call reported.
+        p = _make_provider()
+        p.last_usage_tokens = 999
+        with patch(
+            "odoo.addons.orc_client_semantic_search.providers.openai.requests.post",
+            side_effect=requests.ConnectionError("dns fail"),
+        ):
+            with self.assertRaises(EmbeddingProviderError):
+                p.embed(["x"])
+        self.assertIsNone(p.last_usage_tokens)

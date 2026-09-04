@@ -38,7 +38,7 @@ class OrcTasksController(http.Controller):
       - GET  /orc/tasks/list  → list my AI Workplace tasks (for the systray
         popover + the dock's window-restore path)
       - POST /orc/tasks/open  → mint a one-time SSO nonce with a
-        return_to pointing at /dashboard/tasks/{id}?embed=1; the
+        return_to pointing at /tasks/{id}?embed=1; the
         browser form-POSTs the nonce into the iframe which lands
         logged-in inside the embed layout
       - POST /orc/tasks/create → create a new task (room + first
@@ -79,7 +79,7 @@ class OrcTasksController(http.Controller):
             data = (
                 request.env["orc.client"]
                 .sudo()
-                .list_my_tasks(acting_user=user._orc_effective_email())
+                .list_my_tasks(acting_user=user._orc_gateway_identity())
             )
         except UserError as exc:
             _logger.info("AI Workplace list_my_tasks failed: %s", exc)
@@ -99,7 +99,7 @@ class OrcTasksController(http.Controller):
         csrf=False,
     )
     def open_task(self, **_kwargs):
-        """Mint a nonce targeting /dashboard/tasks/{room_id}?embed=1.
+        """Mint a nonce targeting /tasks/{room_id}?embed=1.
 
         Body: `room_id` (matrix room id, e.g. !abc:host).
 
@@ -153,7 +153,7 @@ class OrcTasksController(http.Controller):
                 request.env["orc.client"]
                 .sudo()
                 .mint_sso_nonce(
-                    email=user._orc_effective_email(),
+                    email=user._orc_gateway_identity(),
                     return_to=return_to,
                     browser_user_agent=browser_ua,
                     browser_ip=browser_ip,
@@ -225,7 +225,7 @@ class OrcTasksController(http.Controller):
                 request.env["orc.client"]
                 .sudo()
                 .create_task(
-                    acting_user=user._orc_effective_email(),
+                    acting_user=user._orc_gateway_identity(),
                     infrastructure_id=infra_id,
                     message=message,
                 )
@@ -254,9 +254,9 @@ class OrcTasksController(http.Controller):
         """Top-level SSO landing on a specific task inside full AI Workplace.
 
         Mirrors ``/orc/sso/start`` from the provisioning addon but with
-        ``return_to`` pointing at ``/dashboard/tasks/{room_id}`` (no
+        ``return_to`` pointing at ``/tasks/{room_id}`` (no
         ``?embed=1``). Used by the chat window's "Open in AI Workplace" link to
-        pop the current room in a new tab with the full dashboard chrome.
+        pop the current room in a new tab with the full AI Workplace chrome.
         """
         user = self._guard_user()
         if user is None:
@@ -271,12 +271,12 @@ class OrcTasksController(http.Controller):
                 status=400,
                 content_type="text/plain; charset=utf-8",
             )
-        return_to = f"/dashboard/tasks/{quote(room_id, safe='')}"
+        return_to = f"/tasks/{quote(room_id, safe='')}"
         try:
             data = (
                 request.env["orc.client"]
                 .sudo()
-                .mint_sso_nonce(email=user._orc_effective_email(), return_to=return_to)
+                .mint_sso_nonce(email=user._orc_gateway_identity(), return_to=return_to)
             )
         except UserError as exc:
             _logger.info("AI Workplace mint_sso_nonce (open-in-orc) failed: %s", exc)

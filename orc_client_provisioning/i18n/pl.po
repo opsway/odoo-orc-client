@@ -4,7 +4,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server 18.0\n"
+"Project-Id-Version: Odoo Server 15.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-05-11 11:49+0000\n"
 "PO-Revision-Date: 2026-05-11 11:49+0000\n"
@@ -31,6 +31,29 @@ msgstr "Dziennik audytu"
 #: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_enabled
 msgid "AI Workplace access"
 msgstr "Dostęp do AI Workplace"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_read_only
+msgid "AI tools are read-only"
+msgstr "Narzędzia AI tylko do odczytu"
+
+#. module: orc_client_provisioning
+#: model:ir.model.fields,help:orc_client_provisioning.field_res_users__orc_read_only
+msgid ""
+"Whether this user's AI tools may only READ from Odoo. Changing it "
+"here applies the change in AI Workplace immediately, under your own "
+"permissions — you must be an organization admin there, and the "
+"change is refused if you are not. AI Workplace remains the source of "
+"truth; this field reflects its state as of 'Last synced at'. It can "
+"take about a minute for a running agent to pick up the change."
+msgstr ""
+"Określa, czy narzędzia AI tego użytkownika mogą tylko CZYTAĆ dane z "
+"Odoo. Zmiana tego pola jest natychmiast stosowana w AI Workplace z "
+"Twoimi uprawnieniami — musisz być tam administratorem organizacji, w "
+"przeciwnym razie zmiana zostanie odrzucona. Źródłem prawdy pozostaje "
+"AI Workplace; to pole odzwierciedla jego stan z chwili podanej w "
+"„Ostatnia synchronizacja”. Uruchomiony agent może potrzebować około "
+"minuty, aby uwzględnić zmianę."
 
 #. module: orc_client_provisioning
 #: model:res.groups,comment:orc_client_provisioning.group_orc_manager
@@ -63,7 +86,6 @@ msgstr "Nazwa wyświetlana"
 
 #. module: orc_client_provisioning
 #: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__status__drift
-#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__res_users__orc_last_sync_status__drift
 msgid "Drift"
 msgstr "Rozbieżność"
 
@@ -132,7 +154,7 @@ msgid "Last synced at"
 msgstr "Ostatnia synchronizacja"
 
 #. module: orc_client_provisioning
-#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_api_key_id
+#: model:ir.model.fields,field_description:orc_client_provisioning.field_res_users__orc_api_key_ref
 msgid "Managed API key"
 msgstr "Zarządzany klucz API"
 
@@ -202,6 +224,11 @@ msgid "Open AI Workplace"
 msgstr "Otwórz AI Workplace"
 
 #. module: orc_client_provisioning
+#: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__orphan_remote_user
+msgid "Orphan remote user"
+msgstr ""
+
+#. module: orc_client_provisioning
 #: model:ir.model.fields.selection,name:orc_client_provisioning.selection__orc_audit_log__action__provision
 msgid "Provision"
 msgstr "Zarejestruj"
@@ -254,9 +281,9 @@ msgstr "ID użytkownika"
 #. module: orc_client_provisioning
 #: model:ir.model.fields,help:orc_client_provisioning.field_res_users__orc_enabled
 msgid ""
-"When enabled, the user is provisioned into the AI Workplace, gets "
-"an auto-managed Odoo API key pushed to it, and sees the systray icon to open"
-" their AI Workplace conversations."
+"When enabled, the user is provisioned into AI Workplace, gets an "
+"auto-managed Odoo API key pushed to it, and sees the systray icon to "
+"open their AI Workplace conversations."
 msgstr ""
 "Po włączeniu użytkownik zostaje zarejestrowany w AI Workplace, "
 "otrzymuje automatycznie zarządzany klucz API Odoo i widzi ikonę w systrayu "

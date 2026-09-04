@@ -23,6 +23,17 @@
         wiki model — the v15 stand-in for what was `knowledge.article`
         upstream). Adding more models is a config-row change
         (create another row, set text_field_path + text_extractor, save).
+
+        `index_domain` excludes CATEGORY pages, and that is a v15-specific
+        decision with a v15-specific reason. A category's `content` is not
+        authored text: `_compute_content` generates it from the titles and
+        links of its children (`_get_page_index`). Indexing it would be wrong
+        twice over — it spends provider tokens embedding a table of contents,
+        and the vector goes stale invisibly, because adding, renaming,
+        reparenting or deleting a CHILD rewrites the parent's text without
+        writing to the parent at all, so no create/write hook fires for it.
+        `knowledge.article` upstream has no such generated body, which is why
+        the 18.0 line ships no domain here.
     -->
     <record id="orc_embedding_config_document_page" model="orc.embedding.config">
         <field name="is_global">False</field>
@@ -30,6 +41,7 @@
         <field name="enabled">True</field>
         <field name="text_field_path">content</field>
         <field name="text_extractor">html_strip</field>
+        <field name="index_domain">[("type", "=", "content")]</field>
     </record>
 
 </odoo>
