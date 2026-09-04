@@ -41,24 +41,35 @@ came from — normally production. The copy authenticates as production, and
 because the parameters are present it never reconnects to a staging ORC
 either.
 
-`orc_client_build_reporter` closes this on v15 with `sanitize_if_rebuilt`
-(`models/enrollment.py`), which detects a restore by **build identity** rather
-than a neutralize flag: credentials are stamped with the build they were
-issued to (`orc.bound_build`), and a stamp naming a different build is taken
-as proof they arrived in a dump. It clears them, and enrollment then requests
-credentials of this build's own.
+`orc_client_build_reporter` closes this on v15 with
+`sanitize_if_stage_changed` (`models/enrollment.py`), which detects a restore
+by the **stage the credentials were issued on** rather than a neutralize flag.
+They are stamped with it (`orc.bound_stage`), the stamp travels with the data,
+and comparing it against the stage actually running separates the only two
+cases that matter:
 
-Three things bound it, and each matters:
+- the database was **copied within its own stage** — a staging branch rebuilt
+  from its previous build. The stamp still says `staging`, the credentials are
+  legitimately this environment's, and they are **kept**. Re-provisioning here
+  would be churn: ORC already reissues when it needs to.
+- the database was **restored across stages** — production's dump onto a
+  staging or dev branch. The stamp says `production`, so the credentials
+  belong to another environment and are cleared; enrollment then requests this
+  environment's own.
 
-- it acts only when `ODOO_STAGE` is explicitly `staging` or `dev` — Odoo.sh
-  **production** database names carry a build id too, and it changes on every
-  deploy, so identity alone would have production delete its own live
-  credentials;
-- it deletes only credentials that carry a stamp, so a hand-configured
-  instance is never touched — such an instance adopts the current build
-  instead, and the rebuild after that sanitizes normally;
-- a stamp naming the running build means the dump was restored over itself,
-  and the credentials stay.
+Three things bound it:
+
+- deletion happens only when `ODOO_STAGE` is explicitly `staging` or `dev`.
+  Production is never sanitized, whatever its stamp says. The variable is read
+  directly rather than through the addon's `get_stage()`, which answers `dev`
+  when it is unset — that would make a missing variable destructive.
+- **stamping**, unlike deletion, happens on every stage. Production never
+  enrolls, so nothing else would ever stamp it, and a production dump would
+  then reach staging with no stamp and nothing to compare against.
+- a configured database with **no stamp** on a staging or dev branch cannot be
+  told apart from one somebody configured by hand, so it is left alone with a
+  warning rather than wiped. That case disappears once production has booted
+  "once" with this addon and stamped its own dumps.
 
 **Without `orc_client_build_reporter` installed**, a v15 operator must clear
 `orc.endpoint_url`, `orc.org_token`, `orc.infrastructure_id`,

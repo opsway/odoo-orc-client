@@ -470,42 +470,38 @@ class TestSkipReason(TransactionCase):
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestSanitizeIfRebuilt(TransactionCase):
+class TestSanitizeIfStageChanged(TransactionCase):
     """v15's stand-in for neutralize.sql.
 
-    Odoo 15 has no neutralization machinery, so a rebuilt staging branch comes
-    up holding whatever credentials its dump carried — normally production's.
-    ``sanitize_if_rebuilt`` clears them by comparing the build the credentials
-    were stamped for against the build actually running.
+    Odoo 15 has no neutralization machinery, so a branch restored from a
+    production dump comes up holding production's credentials.
+    ``sanitize_if_stage_changed`` clears them by comparing the stage the
+    credentials were issued on against the stage actually running.
 
-    The tests that matter most here are the negative ones. This function
-    deletes live credentials, and the thing standing between it and a
-    production database is the stage check.
+    The two tests that matter most pull in opposite directions: a database
+    copied WITHIN its own stage must keep its credentials (re-provisioning
+    there is churn), and one restored ACROSS stages must lose them.
     """
-
-    OLD_BUILD = "pg-group-stage-11111111"
-    SLUG, BUILD_ID = "pg-group-stage", "25407779"
-    CURRENT = "pg-group-stage-25407779"
 
     def setUp(self):
         super().setUp()
         self.ICP = self.env["ir.config_parameter"].sudo()
         self._configure()
 
-    def _configure(self, stamp=OLD_BUILD):
-        """A build carrying a full set of credentials, stamped for `stamp`."""
+    def _configure(self, stamp="production"):
+        """A database carrying credentials issued on `stamp`'s stage."""
         self.ICP.set_param("orc.endpoint_url", "https://help.opsway.com")
         self.ICP.set_param("orc.org_token", "orc_" + "p" * 64)
         self.ICP.set_param("orc.infrastructure_id", "prod-infra-uuid")
         self.ICP.set_param("orc.rotation_days", "30")
-        self.ICP.set_param(enrollment._PARAM_BOUND_BUILD, stamp or False)
+        self.ICP.set_param(enrollment._PARAM_BOUND_STAGE, stamp or False)
 
     def _sanitize(self, stage="staging"):
         env = {} if stage is None else {"ODOO_STAGE": stage}
         with mock.patch.object(enrollment, "Registry",
                                lambda _db: _FakeRegistry(self.env.cr)), \
              mock.patch.dict(os.environ, env, clear=True):
-            return enrollment.sanitize_if_rebuilt(DB, self.SLUG, self.BUILD_ID)
+            return enrollment.sanitize_if_stage_changed(DB)
 
     def _param(self, key):
         return (self.ICP.get_param(key) or "").strip()
@@ -514,14 +510,35 @@ class TestSanitizeIfRebuilt(TransactionCase):
         return all(self._param(k) for k in (
             "orc.endpoint_url", "orc.org_token", "orc.infrastructure_id"))
 
-    # -- it clears what it should -----------------------------------------
+    # -- the case the build-id check got wrong ----------------------------
 
-    def test_a_rebuilt_staging_build_drops_credentials_it_did_not_earn(self):
+    def test_a_rebuild_within_the_same_stage_keeps_its_credentials(self):
+        # A staging branch rebuilt from the previous staging build. The build
+        # id changes, the stage does not, and the credentials are legitimately
+        # this environment's own — so they stay. Comparing build ids wiped
+        # here and forced a re-enrollment on every staging push.
+        self._configure(stamp="staging")
+        self.assertFalse(self._sanitize("staging"))
+        self.assertTrue(self._still_configured())
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE), "staging")
+
+    def test_a_dev_build_keeps_credentials_issued_on_dev(self):
+        self._configure(stamp="dev")
+        self.assertFalse(self._sanitize("dev"))
+        self.assertTrue(self._still_configured())
+
+    # -- and the case it must catch ---------------------------------------
+
+    def test_a_production_dump_on_staging_loses_them(self):
         self.assertTrue(self._sanitize("staging"))
         self.assertFalse(self._still_configured())
-        # The stamp goes too, so a failed re-enrollment doesn't leave a
+        # The stamp goes too, so a failed re-enrollment does not leave a
         # binding claim behind for the next boot to trust.
-        self.assertFalse(self._param(enrollment._PARAM_BOUND_BUILD))
+        self.assertFalse(self._param(enrollment._PARAM_BOUND_STAGE))
+
+    def test_a_production_dump_on_dev_loses_them_too(self):
+        self.assertTrue(self._sanitize("dev"))
+        self.assertFalse(self._still_configured())
 
     def test_it_clears_this_addon_s_own_keys_as_well(self):
         # Especially the preimage: a live proof must not survive into a copy,
@@ -535,73 +552,57 @@ class TestSanitizeIfRebuilt(TransactionCase):
                     enrollment._PARAM_ENROLL_BASE):
             self.assertFalse(self._param(key), key)
 
-    def test_dev_is_sanitizable_too(self):
-        self.assertTrue(self._sanitize("dev"))
-        self.assertFalse(self._still_configured())
-
-    # -- and, far more importantly, what it must never touch ---------------
+    # -- what it must never touch -----------------------------------------
 
     def test_production_is_never_sanitized(self):
-        # Odoo.sh production database names carry a build id that changes on
-        # every deploy, so identity alone would have production delete its own
-        # live credentials. Only the stage check stops that.
+        # Even carrying a staging stamp — e.g. somebody restored a staging
+        # dump into production. Deleting live production credentials is never
+        # this function's call.
+        self._configure(stamp="staging")
         self.assertFalse(self._sanitize("production"))
         self.assertTrue(self._still_configured())
 
     def test_production_records_ownership_instead(self):
-        # The other half of the same guard, and the one a previous version got
-        # wrong. Production never enrolls, so `_apply` never stamps it; if
-        # stamping were skipped outside staging/dev as well, a production dump
-        # would land on staging carrying NO stamp and keep production's
-        # credentials for a whole rebuild cycle. Stamping is safe everywhere
-        # because only the delete is stage-gated.
+        # The half a previous revision got wrong. Production never enrolls, so
+        # `_apply` never stamps it; without this a production dump would reach
+        # staging with no stamp and nothing to compare against.
+        self._configure(stamp=None)
         self.assertFalse(self._sanitize("production"))
-        self.assertEqual(self._param(enrollment._PARAM_BOUND_BUILD),
-                         self.CURRENT)
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE),
+                         "production")
 
-    def test_an_unconfigured_production_build_claims_nothing(self):
-        # No credentials means no ownership to record — a stamp here would
-        # make a later rebuild delete something this build never held.
-        for key in ("orc.endpoint_url", "orc.org_token",
-                    "orc.infrastructure_id", enrollment._PARAM_BOUND_BUILD):
-            self.ICP.set_param(key, False)
-        self.assertFalse(self._sanitize("production"))
-        self.assertFalse(self._param(enrollment._PARAM_BOUND_BUILD))
-
-    def test_an_absent_stage_is_not_read_as_dev(self):
+    def test_an_absent_stage_does_nothing_at_all(self):
         # `get_stage()` answers "dev" when ODOO_STAGE is unset. Using it here
-        # would make a missing environment variable destructive, so this path
-        # reads the variable itself and requires a known value.
+        # would make a missing environment variable destructive, so an
+        # unreadable stage means hands off — no delete, and no stamp either.
+        self._configure(stamp="production")
         self.assertFalse(self._sanitize(None))
         self.assertTrue(self._still_configured())
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE),
+                         "production")
 
     def test_an_unrecognised_stage_does_nothing(self):
         self.assertFalse(self._sanitize("qa"))
         self.assertTrue(self._still_configured())
 
-    def test_the_same_build_keeps_its_own_credentials(self):
-        self._configure(stamp=self.CURRENT)
-        self.assertFalse(self._sanitize("staging"))
-        self.assertTrue(self._still_configured())
-
-    def test_an_unstamped_build_is_adopted_rather_than_wiped(self):
-        # A hand-configured instance never went through `_apply`, so it has no
-        # stamp. Deleting on "no stamp" would wipe credentials we never issued;
-        # instead it adopts the current build, and the NEXT rebuild sanitizes.
+    def test_an_unstamped_staging_database_is_left_alone(self):
+        # Cannot be told apart from a hand-configured instance, and wiping an
+        # operator's own configuration when the branch may not be armed on the
+        # ORC side is not an improvement. Warned about, not deleted.
         self._configure(stamp=None)
         self.assertFalse(self._sanitize("staging"))
         self.assertTrue(self._still_configured())
-        self.assertEqual(self._param(enrollment._PARAM_BOUND_BUILD),
-                         self.CURRENT)
+        self.assertFalse(self._param(enrollment._PARAM_BOUND_STAGE))
 
-    def test_an_unconfigured_build_is_not_stamped(self):
-        # Nothing to bind, so claiming a binding would be a lie the next
-        # rebuild acts on.
+    def test_an_unconfigured_build_claims_nothing(self):
+        # No credentials means no ownership to record — a stamp here would
+        # have a later restore delete something this stage never held.
         for key in ("orc.endpoint_url", "orc.org_token",
-                    "orc.infrastructure_id", enrollment._PARAM_BOUND_BUILD):
+                    "orc.infrastructure_id", enrollment._PARAM_BOUND_STAGE):
             self.ICP.set_param(key, False)
-        self.assertFalse(self._sanitize("staging"))
-        self.assertFalse(self._param(enrollment._PARAM_BOUND_BUILD))
+        for stage in ("production", "staging"):
+            self.assertFalse(self._sanitize(stage))
+            self.assertFalse(self._param(enrollment._PARAM_BOUND_STAGE))
 
     def test_the_stale_list_matches_what_neutralize_sql_deletes(self):
         # The same policy expressed three times: this constant (v15), this
@@ -638,11 +639,13 @@ class TestSanitizeIfRebuilt(TransactionCase):
         for key in provisioning_keys:
             self.assertIn(f"'{key}'", prov_sql,
                           f"{key} missing from provisioning's neutralize.sql")
+        # The stamp itself must not ride a dump either.
+        self.assertIn(f"'{enrollment._PARAM_BOUND_STAGE}'", own_sql)
 
 
 @tagged('post_install', '-at_install', 'orc_client_build_reporter')
-class TestRebuildEndToEnd(TransactionCase):
-    """The rebuild path all the way through: sanitize, then re-enroll."""
+class TestCrossStageRestoreEndToEnd(TransactionCase):
+    """The restore path all the way through: sanitize, then re-enroll."""
 
     def setUp(self):
         super().setUp()
@@ -671,58 +674,55 @@ class TestRebuildEndToEnd(TransactionCase):
     def _param(self, key):
         return (self.ICP.get_param(key) or "").strip()
 
-    def test_a_successful_enrollment_stamps_the_build_it_bound(self):
+    def _configure_as(self, stamp):
+        self.ICP.set_param("orc.endpoint_url", "https://help.opsway.com")
+        self.ICP.set_param("orc.org_token", "orc_" + "p" * 64)
+        self.ICP.set_param("orc.infrastructure_id", "prod-infra-uuid")
+        self.ICP.set_param(enrollment._PARAM_BOUND_STAGE, stamp or False)
+
+    def test_a_successful_enrollment_stamps_the_stage_it_bound(self):
         for key in ("orc.endpoint_url", "orc.org_token", "orc.infrastructure_id"):
             self.ICP.set_param(key, False)
         self._run()
-        self.assertEqual(self._param(enrollment._PARAM_BOUND_BUILD),
-                         "pg-group-stage-25407779")
-
-    def test_a_rebuilt_build_sanitizes_then_gets_its_own_credential(self):
-        # The whole point: before this, a v15 staging rebuild sat on
-        # production's token forever because `_needs_enrollment` was false.
-        self.ICP.set_param("orc.endpoint_url", "https://help.opsway.com")
-        self.ICP.set_param("orc.org_token", "orc_" + "p" * 64)
-        self.ICP.set_param("orc.infrastructure_id", "prod-infra-uuid")
-        self.ICP.set_param(enrollment._PARAM_BOUND_BUILD,
-                           "pg-group-stage-11111111")
-        self._run()
-        self.assertTrue(self.posts, "a rebuilt build must ask for a credential")
-        self.assertEqual(self._param("orc.org_token"), MINTED["token"])
-        self.assertEqual(self._param(enrollment._PARAM_BOUND_BUILD),
-                         "pg-group-stage-25407779")
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE), "staging")
 
     def test_a_production_dump_on_staging_is_sanitized_on_the_first_boot(self):
-        # The case the feature actually has to handle, and the one an earlier
-        # version of the sanitizer missed. Production never enrolls, so its
-        # credentials are stamped by the ownership pass, not by `_apply`. That
-        # stamp is what the staging build restoring the dump compares against.
-        # Without it, staging found no stamp, adopted, and kept production's
-        # token until the next rebuild.
-        self.ICP.set_param("orc.endpoint_url", "https://help.opsway.com")
-        self.ICP.set_param("orc.org_token", "orc_" + "p" * 64)
-        self.ICP.set_param("orc.infrastructure_id", "prod-infra-uuid")
-        self.ICP.set_param(enrollment._PARAM_BOUND_BUILD, False)
+        # The case the feature exists for, end to end. Production never
+        # enrolls, so its credentials are stamped by the ownership pass rather
+        # than by `_apply` — and that stamp is what the staging build
+        # restoring the dump compares against.
+        self._configure_as(None)
 
         # 1. Production boots and records that the credentials are its own.
         with mock.patch.object(enrollment, "Registry",
                                lambda _db: _FakeRegistry(self.env.cr)), \
              mock.patch.dict(os.environ, {"ODOO_STAGE": "production"},
                              clear=True):
-            enrollment.sanitize_if_rebuilt(
-                "claimex-prod", "claimex-prod", "4321978")
-        self.assertEqual(self._param(enrollment._PARAM_BOUND_BUILD),
-                         "claimex-prod-4321978")
+            enrollment.sanitize_if_stage_changed("claimex-prod-4321978")
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE),
+                         "production")
 
-        # 2. That dump is restored onto a staging build, which boots and must
-        #    refuse the inherited credentials on the FIRST run.
+        # 2. That dump is restored onto a staging build, which must refuse the
+        #    inherited credentials on the FIRST run.
         self._run()
         self.assertTrue(
             self.posts,
             "staging must ask for its own credential on the first boot")
         self.assertEqual(self._param("orc.org_token"), MINTED["token"])
-        self.assertEqual(self._param(enrollment._PARAM_BOUND_BUILD),
-                         "pg-group-stage-25407779")
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE), "staging")
+
+    def test_a_staging_rebuild_does_not_re_enroll(self):
+        # The behaviour the stage check buys and a build-id check destroyed:
+        # a staging branch rebuilt from its own previous build keeps working
+        # credentials, so nothing is posted and nothing is reissued.
+        self._configure_as("staging")
+        self._run()
+        self.assertFalse(
+            self.posts,
+            "a rebuild within the same stage must not ask for a new "
+            "credential — ORC reissues when it needs to")
+        self.assertEqual(self._param("orc.org_token"), "orc_" + "p" * 64)
+        self.assertEqual(self._param(enrollment._PARAM_BOUND_STAGE), "staging")
 
     def test_a_restored_enroll_base_override_is_not_honoured_for_one_boot(self):
         # `enroll_base` is resolved in `_register_hook`, BEFORE the parameters
@@ -731,11 +731,7 @@ class TestRebuildEndToEnd(TransactionCase):
         # sanitizing, the base is re-resolved and the in-source constant wins.
         hostile = "https://evil.example/webhook/odoo-sh/enroll"
         self.ICP.set_param(enrollment._PARAM_ENROLL_BASE, hostile)
-        self.ICP.set_param("orc.endpoint_url", "https://help.opsway.com")
-        self.ICP.set_param("orc.org_token", "orc_" + "p" * 64)
-        self.ICP.set_param("orc.infrastructure_id", "prod-infra-uuid")
-        self.ICP.set_param(enrollment._PARAM_BOUND_BUILD,
-                           "pg-group-stage-11111111")
+        self._configure_as("production")
 
         self._run(base=hostile)
 

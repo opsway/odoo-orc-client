@@ -19,12 +19,14 @@ token and infrastructure id. That is worse than "not reconnected": the copy
 authenticates as production, and since the parameters are present
 ``_needs_enrollment`` is false, so nothing here would have fired either.
 
-``sanitize_if_rebuilt`` is this version's replacement for that file. It keys
-off build identity rather than a neutralize flag — credentials are stamped
-with the build they were issued to (``orc.bound_build``), and a stamp naming a
-different build means they arrived in a dump. Read its docstring before
-changing it: it deletes credentials, and the guard that keeps it away from
-production is the stage check, not the identity check.
+``sanitize_if_stage_changed`` is this version's replacement for that file. It
+keys off the STAGE the credentials were issued on rather than a neutralize
+flag — they are stamped with it (``orc.bound_stage``), the stamp travels with
+the data, and a stamp naming another stage means they arrived in that
+environment's dump. A database copied WITHIN its stage keeps them, because
+they are legitimately its own. Read its docstring before changing it: it
+deletes credentials, and the guard that keeps it away from production is the
+stage check itself.
 
 Why this lives in the build reporter, and not in provisioning
 -------------------------------------------------------------
@@ -128,6 +130,7 @@ from odoo.modules.registry import Registry
 from odoo.tools import config
 
 from .build_reporter import (
+    _VALID_STAGES,
     get_project_root,
     get_repo_from_git,
     parse_dev_url,
@@ -152,15 +155,12 @@ _PARAM_ENROLL_SECRET = "orc.enroll_secret"
 # reconnected build does not enroll again on every restart.
 _ENV_BUILD_URL = "ODOO_BUILD_URL"
 _PARAM_ENROLL_DONE = "orc_client_build_reporter.enroll_done_key"
-# `<branch_slug>-<build_id>` of the build the `orc.*` credentials were issued
-# to. v15 only reads this — see `sanitize_if_rebuilt`. Written by `_apply`, and
-# adopted on a configured build that has none yet.
-_PARAM_BOUND_BUILD = "orc.bound_build"
+# The Odoo.sh stage the `orc.*` credentials were issued on. v15 only reads
+# this — see `sanitize_if_stage_changed`. Written by `_apply`, and recorded on
+# production by the ownership pass, because production never enrolls.
+_PARAM_BOUND_STAGE = "orc.bound_stage"
 _ENV_STAGE = "ODOO_STAGE"
-# The only two stages on which credentials may be deleted. Deliberately NOT
-# `build_reporter.get_stage()`: that defaults to "dev" when `ODOO_STAGE` is
-# unset, which would make a missing environment variable destructive. A stage
-# we cannot read is a stage we do not touch.
+# The only two stages on which credentials may be deleted.
 _SANITIZABLE_STAGES = ("staging", "dev")
 # What a restore onto a different build must not carry forward. The first four
 # are `orc_client_provisioning`'s; the rest are this addon's own.
@@ -190,6 +190,25 @@ _SKIP_STOP_AFTER_INIT = (
     "without waiting for daemon threads; the serving process that starts next "
     "enrolls instead"
 )
+
+
+def current_stage():
+    """This build's Odoo.sh stage, or ``None`` when it cannot be established.
+
+    Deliberately NOT ``build_reporter.get_stage()``. That helper answers
+    ``"dev"`` when ``ODOO_STAGE`` is unset, which is the right default for
+    labelling a report and the wrong one here: this value gates the deletion of
+    live credentials, so a variable we cannot read must mean "do nothing", not
+    "assume dev".
+
+    >>> import os; os.environ["ODOO_STAGE"] = " Staging "
+    >>> current_stage()
+    'staging'
+    >>> del os.environ["ODOO_STAGE"]; current_stage() is None
+    True
+    """
+    stage = (os.environ.get(_ENV_STAGE) or "").strip().lower()
+    return stage if stage in _VALID_STAGES else None
 
 
 def split_db_name(dbname):
@@ -487,55 +506,61 @@ def _forget_secret(dbname, done_key):
         _logger.exception("[orc_enrollment] could not clear the challenge secret")
 
 
-def sanitize_if_rebuilt(dbname, branch_slug, build_id):
+def sanitize_if_stage_changed(dbname):
     """Odoo 15's stand-in for ``neutralize.sql``. Returns True if it cleared.
 
     Odoo grew per-module neutralization in 16.0 (``odoo.modules.neutralize``).
     On 15 that machinery does not exist, so neither this addon's
-    ``data/neutralize.sql`` nor ``orc_client_provisioning``'s ever runs, and a
-    rebuilt Odoo.sh staging branch comes up holding the credentials of
-    whatever database its dump came from — normally production. Two things are
+    ``data/neutralize.sql`` nor ``orc_client_provisioning``'s ever runs, and an
+    Odoo.sh branch restored from a production dump comes up still holding
+    production's endpoint, Bearer token and infrastructure id. Two things are
     wrong with that at once: the copy keeps authenticating as production, and
-    because the parameters are present ``_needs_enrollment`` is false, so the
-    build never reconnects to a staging AI Workplace either. This closes both.
+    because the parameters are present ``_needs_enrollment`` is false, so it
+    never reconnects to a staging AI Workplace either. This closes both.
 
-    The trigger is build identity, not a neutralize flag, because v15 has no
-    flag to read: credentials are stamped with the build they were issued to
-    (``orc.bound_build``), and a stamp naming a different build is proof the
-    parameters arrived in a dump rather than being issued here.
+    The trigger is the STAGE the credentials were issued on, recorded in
+    ``orc.bound_stage``. v15 has no neutralize flag to read, and the stamp
+    travels with the data, so comparing it against the stage actually running
+    separates the only two cases that matter:
 
-    Two separate jobs, and they are gated differently on purpose.
+    * the database was **copied within its own stage** — a staging branch
+      rebuilt from the previous staging build. The stamp still says
+      ``staging``, the credentials are legitimately this environment's, and
+      they are KEPT. Re-provisioning here would be pure churn: ORC already has
+      machinery to reissue when it needs to.
+    * the database was **restored across stages** — production's dump onto a
+      staging or dev branch. The stamp says ``production``, so the credentials
+      demonstrably belong to another environment and go.
 
-    **Stamping happens on EVERY stage; deletion only on staging/dev.** That
-    asymmetry is the whole mechanism. A production database never enrolls, so
-    ``_apply`` never stamps it — and an earlier version of this function also
-    skipped stamping outside the sanitizable stages, which broke the case that
-    matters most. A production dump then arrived on staging carrying no stamp
-    at all, the staging build had nothing to compare against, and it kept
-    authenticating as production until the NEXT rebuild: a month of exactly
-    the exposure this exists to end. Recording ownership is a harmless write,
-    so it happens everywhere; only the delete is gated.
+    An earlier revision compared the *build id* instead. That conflated the
+    two: every staging push changes the build id, so it wiped and re-enrolled
+    on each one, and a staging branch's own working credentials never survived
+    a deploy.
 
-    Conditions for deleting:
+    Two separate jobs, gated differently on purpose.
 
-    * **The stage is explicitly ``staging`` or ``dev``.** Odoo.sh production
-      database names carry a build id too, and it changes on every production
-      deploy — so build identity ALONE would have production delete its own
-      live credentials on the next deploy. Read straight from the environment
-      and require a known value: ``get_stage()`` is not used here because it
-      answers "dev" when ``ODOO_STAGE`` is absent, which would turn a missing
-      variable into a wipe.
-    * **There is a stamp.** We delete only credentials some build claimed. On
-      a sanitizable stage an *unstamped* configured database is one nothing
-      running this code ever owned — a hand-configured staging instance, or a
-      dump taken before this version shipped. Wiping those would destroy an
-      operator's own configuration, and if the branch is not armed on the ORC
-      side nothing would replace it. They adopt instead.
-    * **The stamp names another build.** Same build means the dump was
-      restored over itself; the credentials are this build's own and stay.
+    **Stamping happens on every stage; deletion only on staging/dev.**
+    Production never enrolls, so ``_apply`` never stamps it — and if stamping
+    were also skipped outside the sanitizable stages, a production dump would
+    reach staging carrying no stamp at all, leaving nothing to compare
+    against. Recording the stage is a harmless write, so it happens
+    everywhere; only the delete is gated. Production is never sanitized here,
+    whatever its stamp says.
+
+    The one case this cannot decide is a **configured database with no
+    stamp** on a sanitizable stage: a dump taken before this version shipped,
+    or an instance somebody configured by hand. It is left alone with a
+    warning rather than wiped — destroying an operator's own configuration,
+    when the branch may not be armed on the ORC side to replace it, is not an
+    improvement. It resolves itself as soon as production has booted once with
+    this addon and stamped its own dumps.
     """
-    stage = (os.environ.get(_ENV_STAGE) or "").strip().lower()
-    current = f"{branch_slug}-{build_id}"
+    stage = current_stage()
+    if not stage:
+        # Not an Odoo.sh build, or a stage we cannot read. Never touch
+        # credentials we cannot place.
+        return False
+
     try:
         with Registry(dbname).cursor() as cr:
             env = api.Environment(cr, SUPERUSER_ID, {})
@@ -543,57 +568,55 @@ def sanitize_if_rebuilt(dbname, branch_slug, build_id):
             # earlier in this transaction has to be pushed down first — same
             # reason `published_challenge` flushes.
             _flush_params(env)
-            cfg = _params(cr, list(_STALE_ON_REBUILD) + [_PARAM_BOUND_BUILD])
-            stamped = cfg.get(_PARAM_BOUND_BUILD)
+            cfg = _params(cr, list(_STALE_ON_REBUILD) + [_PARAM_BOUND_STAGE])
+            stamped = cfg.get(_PARAM_BOUND_STAGE)
             ICP = env["ir.config_parameter"].sudo()
             # Stamping is only meaningful once credentials exist — claiming a
-            # binding that was never made would make the next rebuild delete
-            # something this build never had.
-            configured = not _needs_enrollment(cfg)
+            # binding that was never made would have a later restore delete
+            # something this environment never had.
+            if _needs_enrollment(cfg):
+                return False
 
             if stage not in _SANITIZABLE_STAGES:
-                # Production, or a stage we cannot read. Never delete here —
-                # only record which build currently holds the credentials, so
-                # a staging copy of this database can tell they are not its
-                # own. Re-stamped rather than written once, because a
-                # production deploy changes the build id.
-                if configured and stamped != current:
-                    ICP.set_param(_PARAM_BOUND_BUILD, current)
+                # Production. Only ever record that these credentials are
+                # this stage's, so a copy of this database elsewhere can tell
+                # they are not its own.
+                if stamped != stage:
+                    ICP.set_param(_PARAM_BOUND_STAGE, stage)
                     _logger.info(
-                        "[orc_enrollment] recorded build %s as the owner of "
-                        "the orc.* credentials (stage=%s, previous=%s)",
-                        current, stage or "<unset>", stamped or "<none>",
+                        "[orc_enrollment] recorded stage=%s as the owner of "
+                        "the orc.* credentials (previous=%s)",
+                        stage, stamped or "<none>",
                     )
                 return False
 
             if not stamped:
-                # Nothing running this code ever claimed these. Adopt, so the
-                # next rebuild has something to compare against. With
-                # production stamping itself above, this no longer covers the
-                # restored-production-dump case — it is now only a
-                # hand-configured instance or a pre-upgrade dump.
-                if configured:
-                    ICP.set_param(_PARAM_BOUND_BUILD, current)
-                    _logger.info(
-                        "[orc_enrollment] adopted build %s for unstamped "
-                        "orc.* credentials; a later rebuild will sanitize",
-                        current,
-                    )
+                _logger.warning(
+                    "[orc_enrollment] stage=%s holds orc.* credentials with "
+                    "no %s stamp, so it cannot be told whether they are its "
+                    "own or came from another environment's dump. Leaving "
+                    "them in place. If this database was restored from "
+                    "production, clear orc.endpoint_url, orc.org_token and "
+                    "orc.infrastructure_id by hand and restart to reconnect.",
+                    stage, _PARAM_BOUND_STAGE,
+                )
                 return False
 
-            if stamped == current:
+            if stamped == stage:
+                # Copied within its own stage. These credentials are this
+                # environment's own — the case the build-id check got wrong.
                 return False
 
             cleared = [k for k in _STALE_ON_REBUILD if cfg.get(k)]
             for key in _STALE_ON_REBUILD:
                 ICP.set_param(key, False)
-            ICP.set_param(_PARAM_BOUND_BUILD, False)
+            ICP.set_param(_PARAM_BOUND_STAGE, False)
             _logger.warning(
-                "[orc_enrollment] %s carries credentials issued to %s — "
-                "cleared %s parameter(s) (%s). Odoo 15 does not run "
-                "neutralize.sql, so this stands in for it; enrollment will "
-                "now request credentials of this build's own.",
-                current, stamped, len(cleared), ", ".join(cleared) or "none",
+                "[orc_enrollment] stage=%s is holding credentials issued on "
+                "stage=%s — cleared %s parameter(s) (%s). Odoo 15 does not "
+                "run neutralize.sql, so this stands in for it; enrollment "
+                "will now request credentials of this environment's own.",
+                stage, stamped, len(cleared), ", ".join(cleared) or "none",
             )
             return True
     except Exception:
@@ -601,7 +624,8 @@ def sanitize_if_rebuilt(dbname, branch_slug, build_id):
         # module-loading transaction. Leaving the stale parameters in place is
         # the safe failure — it is the status quo on v15, not a regression.
         _logger.exception(
-            "[orc_enrollment] could not check whether this build was rebuilt")
+            "[orc_enrollment] could not check which stage these credentials "
+            "belong to")
         return False
 
 
@@ -632,13 +656,13 @@ def _apply(env, minted):
         if cron and not cron.active:
             cron.sudo().write({"active": True})
 
-    # Which build these credentials belong to. On v15 this is what lets a
-    # later rebuild recognise that the parameters it restored are somebody
-    # else's — see `sanitize_if_rebuilt`. Harmless on 16+, where neutralize
-    # deletes them for real.
-    ICP.set_param(
-        _PARAM_BOUND_BUILD, f"{minted['branch_slug']}-{minted['build_id']}",
-    )
+    # Which stage these credentials belong to. On v15 this is what lets a
+    # database restored onto another stage recognise that the parameters it
+    # inherited are somebody else's — see `sanitize_if_stage_changed`.
+    # Harmless on 16+, where neutralize deletes them for real.
+    stage = current_stage()
+    if stage:
+        ICP.set_param(_PARAM_BOUND_STAGE, stage)
 
     # The preimage has done its job. Leaving it parks a live secret in a
     # database that gets dumped and restored elsewhere.
@@ -740,8 +764,8 @@ def _run_enrollment(dbname, enroll_base):
         # ---- 0. v15 only: stand in for neutralize.sql. -------------------
         #
         # Must run before anything reads the `orc.*` parameters, because on
-        # v15 the ones sitting there may have arrived in a production dump.
-        if sanitize_if_rebuilt(dbname, branch_slug, build_id):
+        # v15 the ones sitting there may have arrived in another stage's dump.
+        if sanitize_if_stage_changed(dbname):
             # `enroll_base` was resolved in `_register_hook`, BEFORE the
             # parameters were known to be stale — and the ICP override decides
             # where this build submits its proof. A restored dump naming
@@ -875,12 +899,7 @@ def _run_enrollment(dbname, enroll_base):
         try:
             with Registry(dbname).cursor() as cr:
                 env = api.Environment(cr, SUPERUSER_ID, {})
-                _apply(env, dict(
-                    minted,
-                    endpoint_url=endpoint_url,
-                    branch_slug=branch_slug,
-                    build_id=build_id,
-                ))
+                _apply(env, dict(minted, endpoint_url=endpoint_url))
                 env["ir.config_parameter"].sudo().set_param(
                     _PARAM_ENROLL_DONE, done_key)
         except Exception:

@@ -9,10 +9,10 @@
 -- 15.0 has no neutralization machinery at all — not even in `base`. This file
 -- is kept because it is the correct thing to run and because the addon may be
 -- carried to a later version, but on v15 nothing below happens. Its job is
--- done instead by `sanitize_if_rebuilt` in `models/enrollment.py`, which keys
--- off build identity (`orc.bound_build`) rather than a neutralize flag,
--- because v15 offers no flag to read. Keep the two lists in step: anything
--- added here belongs in `_STALE_ON_REBUILD` there too.
+-- done instead by `sanitize_if_stage_changed` in `models/enrollment.py`, which
+-- keys off the stage the credentials were issued on (`orc.bound_stage`) rather
+-- than a neutralize flag, because v15 offers no flag to read. Keep the two
+-- lists in step: anything added here belongs in `_STALE_ON_REBUILD` there too.
 --
 -- Four keys, and each matters for a different reason.
 --
@@ -35,15 +35,13 @@
 -- development override restored from a dump would send a real build's proof,
 -- and all of its later API traffic, to whatever host that override names. The
 -- in-source constant is the value that should win on a restored copy.
--- `orc.bound_build` is the build these credentials were issued to. It is only
--- read on v15, but it must not ride a dump either: a stamp naming the source
--- build is what the v15 sanitizer treats as proof the parameters are somebody
--- else's, and carrying a stale one into a database whose credentials were
--- legitimately re-issued would make it sanitize a build that is fine.
+-- `orc.bound_stage` is the stage these credentials were issued on. It is only
+-- read on v15, and on 16+ the credentials it describes are being deleted here
+-- anyway, so it would only be left describing something that no longer exists.
 DELETE FROM ir_config_parameter
  WHERE key IN (
     'orc.enroll_secret',
     'orc_client_build_reporter.enroll_done_key',
     'orc_client_build_reporter.enroll_base',
-    'orc.bound_build'
+    'orc.bound_stage'
  );

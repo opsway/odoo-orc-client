@@ -8,9 +8,10 @@
 --
 -- ODOO 15 NEVER RUNS THIS FILE.  `odoo.modules.neutralize` arrived in
 -- 16.0; 15.0 has no neutralization machinery at all.  On v15 the four
--- keys below are cleared instead by `sanitize_if_rebuilt` in
+-- keys below are cleared instead by `sanitize_if_stage_changed` in
 -- `orc_client_build_reporter/models/enrollment.py`, which detects a
--- restore by build identity because v15 has no neutralize flag to read.
+-- cross-stage restore by the stage stamp, because v15 has no neutralize
+-- flag to read.
 -- Without that addon installed, a rebuilt v15 staging branch keeps the
 -- credentials of whatever database its dump came from, and an operator
 -- has to clear these four rows by hand.
