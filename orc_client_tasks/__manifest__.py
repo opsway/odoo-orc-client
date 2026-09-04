@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Tasks",
-    "version": "18.0.0.7.4",
+    "version": "18.0.0.7.5",
     "summary": (
         "In-Odoo chat dock for AI Workplace: task-list systray + Discuss-style"
         " foldable windows embedding AI Workplace chat via SSO."
