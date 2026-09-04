@@ -1,6 +1,6 @@
 {
     "name": "AI Workplace — Semantic Search",
-    "version": "19.0.1.1.1",
+    "version": "19.0.1.1.2",
     "summary": "Permission-aware semantic search over Odoo records, callable by the AI Workplace agent.",
     "description": """
 AI Workplace — Semantic Search

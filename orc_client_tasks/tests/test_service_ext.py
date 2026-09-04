@@ -281,34 +281,61 @@ class TestOrcClientTasksExt(TransactionCase):
     # toggles the dark class before paint
     # (see opsway/odoo-agent-gateway#85).
 
-    def test_embed_return_to_appends_the_default_when_param_unset(self):
-        # Default behaviour — no admin override → whatever
-        # `EMBED_THEME_DEFAULT` says. That was `dark` when this test was
-        # written; d63c1f5 ("light theme by default") flipped it to
-        # `light` to match the rebranded AI Workplace dashboard and did
-        # not update the assertion, so the test asserted a default the
-        # module had stopped having. Read the constant instead of
-        # restating it, so the next flip cannot desynchronise it again.
-        room_id = "!abc:host"
-        url = self.env["orc.client"]._build_embed_return_to(room_id)
+    # Reading `EMBED_THEME_DEFAULT` instead of restating it (aafded5)
+    # keeps these flip-proof, and the absent/garbage tests below still
+    # do that. But it also means the whole block is satisfied by
+    # `theme = EMBED_THEME_DEFAULT` — delete the `get_param` call
+    # outright and nothing here goes red. `dark` is the one value only
+    # the stored parameter can produce, so it is what pins the read
+    # path; patching the module default is what pins the seed.
+    _THEME_DEFAULT = (
+        "odoo.addons.orc_client_tasks.services."
+        "orc_client_tasks_ext.EMBED_THEME_DEFAULT"
+    )
+
+    def test_embed_return_to_uses_the_seeded_theme(self):
+        # The addon seeds `orc_client_tasks.embed_theme` to `light`
+        # (data/ir_config_parameter.xml). Force the in-source default to
+        # `dark` so only the seeded row can still yield `light` — drop the
+        # seed from the manifest and this goes red. Literals are the point
+        # here: the assertion has to differ from the patched default.
+        with patch(self._THEME_DEFAULT, "dark"):
+            url = self.env["orc.client"]._build_embed_return_to("!abc:host")
         self.assertEqual(
-            url,
-            f"/tasks/%21abc%3Ahost?embed=1&theme={EMBED_THEME_DEFAULT}",
+            url, "/tasks/%21abc%3Ahost?embed=1&theme=light",
         )
 
-    def test_embed_return_to_appends_light_when_admin_sets_light(self):
+    def test_embed_return_to_appends_dark_when_admin_sets_dark(self):
+        # `dark` cannot come from the default or the coercion fallback,
+        # so this is the test that proves the parameter is read at all.
+        # It replaces an override test that set `light` — the same value
+        # the default already produces, so it proved nothing.
         self.env["ir.config_parameter"].sudo().set_param(
-            "orc_client_tasks.embed_theme", "light",
+            "orc_client_tasks.embed_theme", "dark",
         )
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
-        self.assertTrue(url.endswith("&theme=light"), url)
+        self.assertTrue(url.endswith("&theme=dark"), url)
+
+    def test_embed_return_to_falls_back_when_the_param_is_absent(self):
+        # A falsy `set_param` unlinks the row, so this drives the absent
+        # path rather than storing the string "False".
+        #
+        # Deliberately NOT claiming to isolate the `get_param` default
+        # argument: it and the coercion fallback are the same constant,
+        # so no assertion can separate them. What this pins is that a
+        # missing parameter still yields a valid theme.
+        self.env["ir.config_parameter"].sudo().set_param(
+            "orc_client_tasks.embed_theme", False,
+        )
+        url = self.env["orc.client"]._build_embed_return_to("!abc:host")
+        self.assertTrue(url.endswith(f"&theme={EMBED_THEME_DEFAULT}"), url)
 
     def test_embed_return_to_falls_back_to_the_default_on_garbage_value(self):
         # Defensive: an admin who fat-fingers `orange` shouldn't
         # send a garbage param to ORC (which would silently leave
         # the SSR cookie default in place — bad UX). Coerce to
         # the documented default — the constant, not a hardcoded
-        # copy of what it happened to be (see the test above).
+        # copy of what it happened to be.
         self.env["ir.config_parameter"].sudo().set_param(
             "orc_client_tasks.embed_theme", "orange",
         )

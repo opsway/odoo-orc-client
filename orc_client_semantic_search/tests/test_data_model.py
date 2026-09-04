@@ -61,10 +61,35 @@ class OrcEmbeddingConfigSingletonTests(TransactionCase):
     def test_global_row_must_not_set_model_name(self):
         # Catches mis-configuration: a "global" row with a model_name
         # would be ambiguous (provider config or per-model toggle?).
+        #
+        # Deliberately a model NO config row already claims, asserted as a
+        # precondition below, so the test can only be satisfied by the
+        # Python `_check_row_kind_fields` it is named after.
+        #
+        # The precondition is asserted rather than the exception message:
+        # that message goes through `_()` and i18n/pl.po ships a live
+        # Polish translation of it, so pinning the English text would fail
+        # under a pl_PL test context on a perfectly working constraint.
+        #
+        # This used to write the indexed model's own name, which a config row
+        # already holds. On 18.0 that still reached the Python constraint
+        # first (verified: the ValidationError carries this message, and
+        # neutering the guard turns the test red, not green) — but it left
+        # the outcome one seeded row away from being decided by the SQL
+        # `UNIQUE (model_name)` instead, which surfaces as an unrelated
+        # IntegrityError. INT-1066 reports the SQL constraint winning on
+        # 15.0, which is where this was found.
         Config = self.env["orc.embedding.config"]
+        unclaimed = "res.partner"
+        self.assertFalse(
+            Config.search_count([("model_name", "=", unclaimed)]),
+            "%s must stay unclaimed, or the SQL UNIQUE (model_name) fires "
+            "instead of the Python constraint this test is named after"
+            % unclaimed,
+        )
         existing = Config.search([("is_global", "=", True)], limit=1)
         with self.assertRaises(ValidationError):
-            existing.write({"model_name": "knowledge.article"})
+            existing.write({"model_name": unclaimed})
 
 
 @tagged("orc_client_semantic_search", "post_install", "-at_install")
