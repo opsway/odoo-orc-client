@@ -35,7 +35,7 @@ gone. They simply have no dead column to clean up later.
 
 Runs as a POST migration because the new column must already exist, and the ORM
 creates it while loading the module — i.e. after every pre-migration.
-``18.0.1.13.0/post-migration.py`` heals dangling pointers on the OLD column and
+``15.0.1.13.0/post-migration.py`` heals dangling pointers on the OLD column and
 post scripts run in version order, so that heal has already happened by the time
 we copy.
 

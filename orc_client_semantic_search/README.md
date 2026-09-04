@@ -30,7 +30,7 @@ falls back to keyword search. No cross-tenant coordination.
 ## Permission model
 
 The search method returns refs only — `[{model, id, score}]`. No
-titles, no snippets, no body. The blob field, if exposed, is raw
+titles, no snippets, no content. The blob field, if exposed, is raw
 float vectors — useless without the embedding model.
 
 There is **one** layer of permission enforcement: the agent's read
@@ -79,7 +79,7 @@ is in scope.
 1. **`enabled`** — the model-wide switch. Off means nothing from
    this model is indexed or searched.
 2. **`index_domain`** — an Odoo domain string, evaluated against the
-   indexed model. Empty means every record. Two `knowledge.article`
+   indexed model. Empty means every record. Two `document.page`
    examples, both on stored searchable fields:
    `[("category", "!=", "private")]` keeps personal articles out, and
    `[("is_article_visible_by_everyone", "=", True)]` narrows to what
@@ -87,7 +87,7 @@ is in scope.
    that the model rejects, fails at save — not silently in the cron.
 3. **`orc_ai_index_exclude`** — a per-record boolean, set by whoever
    can edit the record. True means never index this one, whatever
-   the domain says. On `knowledge.article` it is an optional column
+   the domain says. On `document.page` it is an optional column
    in the article **list** view plus an "Excluded from AI index"
    search filter. Not on the article form: that view is a custom
    OWL layout with no stable anchor for a checkbox, and a bad xpath
@@ -164,7 +164,7 @@ and before every domain edit.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | int | PK |
-| `model` | char(64) | `knowledge.article`, … |
+| `model` | char(64) | `document.page`, … |
 | `res_id` | int | Record id within `model` |
 | `vector_blob` | binary | `numpy.tobytes()` of a float32 array; sized by `vector_dim` from config |
 | `content_hash` | char(64) | sha256 of the extracted text used to build the vector |
@@ -197,7 +197,7 @@ and field selection.
 | `model_name` | char | The Odoo model to index (only on per-model rows) |
 | `enabled` | bool | Whether to index this model (only on per-model rows). Setting it False purges that model's vectors on save |
 | `index_domain` | char | Odoo domain string limiting which records of `model_name` are in scope. Empty = all. Validated at save; narrowing it purges on save (only on per-model rows) |
-| `text_field_path` | char | Dotted path to the text source. `body` for `knowledge.article`. Future models may use `description` or `name + body` (only on per-model rows) |
+| `text_field_path` | char | Dotted path to the text source. `content` for `document.page`. Future models may use `description` or `name + content` (only on per-model rows) |
 | `text_extractor` | selection | `html_strip` (default for HTML fields), `plain` (no transform), `attachment` (run pypdf etc.) — only on per-model rows |
 
 Singleton enforcement: a unique constraint on `is_global=True` (only
@@ -210,7 +210,7 @@ one global row may exist). Per-model rows must have
 |---|---|---|
 | `orc_ai_index_exclude` | bool | On the indexed model itself, not on `orc.embedding`. True = never index this record. Indexed in SQL, since the predicate filters on it |
 
-Added to `knowledge.article` by this module. A model with no such
+Added to `document.page` by this module. A model with no such
 field is treated as "nothing excluded" — the predicate checks
 `_fields` rather than requiring every future model to carry it, so
 adding a model stays a config-row change.
@@ -266,7 +266,7 @@ A list view + form. v1 ships one row pre-configured:
 
 | model_name | enabled | index_domain | text_field_path | text_extractor |
 |---|---|---|---|---|
-| `knowledge.article` | True | *(empty — all articles)* | `body` | `html_strip` |
+| `document.page` | True | *(empty — all pages)* | `content` | `html_strip` |
 
 Adding a model is data-driven: create a new row, set
 `text_field_path`, save. The cron picks it up on the next pass.
@@ -325,7 +325,7 @@ def semantic_search(self, query, models=None, limit=10):
 
     :returns: list[dict] — [{"model": str, "id": int, "score": float}, ...]
         Sorted descending by score, score in [0, 1] (cosine on
-        L2-normalised vectors). NO titles, snippets, or body —
+        L2-normalised vectors). NO titles, snippets, or content —
         callers must read records via the standard Odoo APIs as
         the end user, where `ir.rule` enforces visibility.
 
@@ -436,7 +436,7 @@ the existing pattern:
 
 ## Supported scope (v1)
 
-Indexed: `knowledge.article` only.
+Indexed: `document.page` only (OCA `document_page`).
 
 Adding `ir.attachment`, `helpdesk.ticket`, `mail.message`, etc. is
 a v1.5+ change: add a config row with the right `text_extractor`
@@ -468,7 +468,7 @@ and ship the extractor utility if not already present.
 1. Install module on the tenant's Odoo (standard apps menu).
 2. Settings → Technical → AI Semantic Search.
 3. **Decide scope before you decide provider.** On the
-   `knowledge.article` row, set `index_domain` (or leave it empty
+   `document.page` row, set `index_domain` (or leave it empty
    deliberately), then click **"Preview scope"** and read the
    "would be sent to the provider" figure. Installing the module
    leaves `enabled=True` with an empty domain, so the only thing

@@ -14,10 +14,27 @@ at all, which is precisely the situation enrollment repairs, so there is
 nothing to authenticate with.
 """
 
+import json
+
+import werkzeug.wrappers
+
 from odoo import http
 from odoo.http import request
 
 from ..models.enrollment import published_challenge
+
+
+# v15 has no `request.make_json_response` (v16+). Building the werkzeug
+# response directly is what the sister controller in orc_client_tasks already
+# does, and it is the only shape that carries a status code and a
+# Cache-Control header in one call on this version.
+def _json_response(payload: dict, status: int = 200) -> werkzeug.wrappers.Response:
+    return werkzeug.wrappers.Response(
+        response=json.dumps(payload),
+        status=status,
+        content_type="application/json; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class OrcEnrollController(http.Controller):
@@ -45,8 +62,6 @@ class OrcEnrollController(http.Controller):
         secret that no longer exists.
         """
         challenge = published_challenge(request.env)
-        headers = [("Cache-Control", "no-store")]
         if not challenge:
-            return request.make_json_response(
-                {"error": "no_challenge"}, status=404, headers=headers)
-        return request.make_json_response({"challenge": challenge}, headers=headers)
+            return _json_response({"error": "no_challenge"}, status=404)
+        return _json_response({"challenge": challenge})

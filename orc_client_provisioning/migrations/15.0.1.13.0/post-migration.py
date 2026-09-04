@@ -20,7 +20,7 @@ _logger = logging.getLogger(__name__)
 
 
 def migrate(cr, version):
-    # 18.0.1.17.0 replaces this Many2one with the Integer `orc_api_key_ref`
+    # 15.0.1.17.0 replaces this Many2one with the Integer `orc_api_key_ref`
     # and drops the column. Post scripts run in version order so this one
     # still sees it on any upgrade path, but guard anyway rather than break
     # an upgrade over a column that no longer needs healing.

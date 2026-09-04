@@ -13,7 +13,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _error_page(status: int, headline: str, detail: str, hint: str = "") -> werkzeug.wrappers.Response:
-    """Inline-HTML error response. Odoo 18 no longer ships a
+    """Inline-HTML error response. Neither v15 nor v18 ships a
     ``web.http_error`` QWeb template, so rendering via xmlid 500s. Keep
     this page dependency-free and styled with inline CSS — the
     AI Workplace team can't count on the client's custom

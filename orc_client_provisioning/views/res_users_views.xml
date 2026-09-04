@@ -17,7 +17,7 @@
                              Odoo versions that relax the constraint. -->
                         <field
                             name="orc_enabled"
-                            readonly="not orc_provisionable"
+                            attrs="{'readonly': [('orc_provisionable', '=', False)]}"
                             help="Requires a non-empty Odoo login."
                         />
                         <field name="orc_is_manager" invisible="1"/>
@@ -33,21 +33,21 @@
                              control and surfaces the refusal. -->
                         <field
                             name="orc_read_only"
-                            invisible="not orc_enabled or not id"
+                            attrs="{'invisible': ['|', ('orc_enabled', '=', False), ('id', '=', False)]}"
                         />
-                        <field name="orc_last_sync_at" readonly="1" invisible="not orc_enabled"/>
+                        <field name="orc_last_sync_at" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
                         <field
                             name="orc_last_sync_status"
                             widget="badge"
                             decoration-success="orc_last_sync_status == 'ok'"
                             decoration-danger="orc_last_sync_status == 'error'"
-                            invisible="not orc_enabled"
+                            attrs="{'invisible': [('orc_enabled', '=', False)]}"
                         />
-                        <field name="orc_last_sync_message" readonly="1" invisible="not orc_last_sync_message"/>
-                        <field name="orc_user_id" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_provisioned_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_last_rotation_at" readonly="1" invisible="not orc_enabled"/>
-                        <field name="orc_api_key_ref" readonly="1" invisible="not orc_enabled"/>
+                        <field name="orc_last_sync_message" readonly="1" attrs="{'invisible': [('orc_last_sync_message', '=', False)]}"/>
+                        <field name="orc_user_id" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_provisioned_at" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_last_rotation_at" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
+                        <field name="orc_api_key_ref" readonly="1" attrs="{'invisible': [('orc_enabled', '=', False)]}"/>
                     </group>
                 </page>
             </xpath>
@@ -59,7 +59,7 @@
         <field name="model">res.users</field>
         <field name="inherit_id" ref="base.view_users_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//list/field[@name='login']" position="after">
+            <xpath expr="//tree/field[@name='login']" position="after">
                 <field name="orc_enabled" optional="show"/>
                 <!-- Hidden by default (the common case is read/write, so a
                      column of empty checkboxes earns nothing); one click in

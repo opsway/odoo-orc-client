@@ -106,7 +106,7 @@ class TestReconcileDrift(TransactionCase):
             "both orphans must be attempted — the loop stopped at the first",
         )
         # Direction A's work survived rather than being rolled back.
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertEqual(self.user.orc_last_sync_message, "in sync")
 
@@ -144,7 +144,7 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_reconcile()
 
-        other.invalidate_recordset()
+        other.invalidate_cache(ids=other.ids)
         self.assertEqual(other.orc_last_sync_status, "error")
         self.assertIn("boom on bob", other.orc_last_sync_message or "")
         self.assertTrue(self.env["orc.audit.log"].search([
@@ -169,7 +169,7 @@ class TestReconcileDrift(TransactionCase):
         ])
         self.assertFalse(log)
         # Healthy in-sync user is stamped ok.
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
 
@@ -191,7 +191,7 @@ class TestReconcileDrift(TransactionCase):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.assertEqual(calls["provision"], 1, "expected one re-provision call")
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
         self.assertIn("re-provisioned", self.user.orc_last_sync_message or "")
@@ -222,7 +222,7 @@ class TestReconcileDrift(TransactionCase):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.assertEqual(calls["revoke_email"], self.user.login)
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("deprovisioned", self.user.orc_last_sync_message or "")
 
@@ -275,7 +275,7 @@ class TestReconcileDrift(TransactionCase):
             self.env["res.users"]._cron_orc_reconcile()
 
         self.assertEqual(calls["provision"], 1)
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("re-provisioned", self.user.orc_last_sync_message or "")
 
@@ -288,7 +288,7 @@ class TestReconcileDrift(TransactionCase):
         with patch_orc_client(self.env, list_users=fail):
             self.env["res.users"]._cron_orc_reconcile()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "error")
         self.assertIn("upstream 500", self.user.orc_last_sync_message or "")
         self.assertTrue(self.user.orc_last_sync_at)
@@ -309,7 +309,7 @@ class TestReconcileDrift(TransactionCase):
         NOT escalate the gateway role."""
         manager_group = self.env.ref("orc_client_provisioning.group_orc_manager")
         self.user.sudo().write({"groups_id": [(4, manager_group.id)]})
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_is_manager)
 
         calls = {"kwargs": None}
@@ -372,7 +372,7 @@ class TestReconcileDrift(TransactionCase):
             push_odoo_key=lambda **kw: None,
         ):
             self.env["res.users"]._cron_orc_rotate_keys()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         # Assert the cron actually rotated. Without this a skipped rotation
         # passes the status check on setUp's leftover "ok" — how the broken
         # `_force_rotation_due` above stayed invisible.
@@ -394,7 +394,7 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_rotate_keys()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "error")
         self.assertIn("ORC down", self.user.orc_last_sync_message or "")
         log = self.env["orc.audit.log"].search([
@@ -422,7 +422,7 @@ class TestReconcileDrift(TransactionCase):
         ):
             user.orc_enabled = True
         user.sudo().write({"orc_gateway_email": False})
-        user.invalidate_recordset()
+        user.invalidate_cache(ids=user.ids)
         return user
 
     def test_reconcile_heals_gateway_email_bare_login_form(self):
@@ -446,7 +446,7 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_reconcile()
 
-        bare.invalidate_recordset()
+        bare.invalidate_cache(ids=bare.ids)
         self.assertEqual(bare.orc_gateway_email, bare.login)
 
     def test_reconcile_heals_gateway_email_qualified_form(self):
@@ -472,7 +472,7 @@ class TestReconcileDrift(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_reconcile()
 
-        bare.invalidate_recordset()
+        bare.invalidate_cache(ids=bare.ids)
         self.assertEqual(bare.orc_gateway_email, qualified)
 
     def test_reconcile_qualified_form_does_not_duplicate_provision(self):
@@ -511,7 +511,7 @@ class TestReconcileDrift(TransactionCase):
             calls["provision"], 0,
             "the bare alias must not trigger a duplicate provision",
         )
-        bare.invalidate_recordset()
+        bare.invalidate_cache(ids=bare.ids)
         self.assertEqual(bare.orc_gateway_email, qualified)
         self.assertEqual(bare.orc_last_sync_status, "ok")
 
@@ -524,7 +524,7 @@ class TestReconcileDrift(TransactionCase):
             },
         ):
             self.env["res.users"]._cron_orc_sync()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
 
     def test_cron_orc_maintenance_runs_rotate(self):
@@ -535,7 +535,7 @@ class TestReconcileDrift(TransactionCase):
             push_odoo_key=lambda **kw: None,
         ):
             self.env["res.users"]._cron_orc_maintenance()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertIn("rotated", self.user.orc_last_sync_message or "")
 
@@ -581,7 +581,7 @@ class TestReadOnlyMirror(TransactionCase):
             list_users=lambda *a, **kw: {"users": [remote_user], "infrastructures": []},
         ):
             self.env["res.users"]._cron_orc_reconcile()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
 
     def test_mirrors_read_only_true_from_remote(self):
         self._reconcile({"email": self.user.login, "role": "user", "read_only": True})
@@ -616,7 +616,7 @@ class TestReadOnlyMirror(TransactionCase):
         self.assertTrue(self.user.orc_read_only)
         with patch_orc_client(self.env, revoke_infra_access=lambda **kw: None):
             self.user.orc_enabled = False
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_read_only)
 
     def test_flag_never_rides_the_provision_or_reconcile_payloads(self):
@@ -667,7 +667,7 @@ class TestReadOnlyMirror(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_reconcile()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_read_only, "mirror should have been refreshed")
         self.assertEqual(calls, [], "the pull refresh must not post anything back")
 
@@ -686,7 +686,7 @@ class TestReadOnlyMirror(TransactionCase):
             },
         ):
             self.env["res.users"]._cron_orc_reconcile()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_read_only)
 
         calls = []
@@ -697,7 +697,7 @@ class TestReadOnlyMirror(TransactionCase):
         ):
             self.user.orc_enabled = False
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_read_only, "cache should be cleared")
         self.assertEqual(calls, [], "deprovision must not post a posture change")
 
@@ -719,7 +719,7 @@ class TestReadOnlyMirror(TransactionCase):
             calls[0]["acting_user"],
             self.env.user._orc_gateway_identity(),
         )
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_read_only)
 
     def test_a_refused_write_through_rolls_the_local_value_back(self):
@@ -735,7 +735,7 @@ class TestReadOnlyMirror(TransactionCase):
             with self.assertRaises(UserError):
                 self.user.orc_read_only = True
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_read_only)
 
     def test_writing_the_unchanged_value_makes_no_call(self):
@@ -784,7 +784,7 @@ class TestReadOnlyMirror(TransactionCase):
             order.index("set_read_only"),
             "the push must run AFTER provisioning, or the credential is absent",
         )
-        fresh.invalidate_recordset()
+        fresh.invalidate_cache(ids=fresh.ids)
         self.assertTrue(fresh.orc_read_only)
 
     def test_disabling_in_the_same_save_pushes_nothing(self):
@@ -855,7 +855,7 @@ class TestReadOnlyMirror(TransactionCase):
                 "orc_read_only": True,
             })
         self.assertEqual(calls, [], "no credential exists at create time")
-        created.invalidate_recordset()
+        created.invalidate_cache(ids=created.ids)
         self.assertFalse(
             created.orc_read_only,
             "must not store a posture that was never applied remotely",
@@ -881,7 +881,7 @@ class TestReadOnlyMirror(TransactionCase):
             self.user.write({"orc_read_only": True})
 
         self.assertEqual(calls, [], "no push for a user without access")
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(
             self.user.orc_read_only,
             "suppressing the push must also suppress the local store",
@@ -906,7 +906,7 @@ class TestReadOnlyMirror(TransactionCase):
             })
 
         self.assertEqual(calls, [], "the renamed identity was just revoked")
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_enabled, "rename forces access off")
         self.assertFalse(self.user.orc_read_only)
 

@@ -20,28 +20,28 @@
                             type="object"
                             string="Test provider"
                             class="btn-primary"
-                            invisible="not is_global"/>
+                            attrs="{'invisible': [('is_global', '=', False)]}"/>
                     <button name="action_reindex_all"
                             type="object"
                             string="Reindex all"
                             class="btn-secondary"
-                            invisible="not is_global"
+                            attrs="{'invisible': [('is_global', '=', False)]}"
                             confirm="This will drop the index for every enabled model and re-embed every in-scope record. Costs money, and sends those records' text to the embedding provider. Run 'Preview scope' first if you are unsure how many that is. Continue?"/>
                     <button name="action_preview_scope"
                             type="object"
                             string="Preview scope"
                             class="btn-primary"
-                            invisible="is_global"/>
+                            attrs="{'invisible': [('is_global', '=', True)]}"/>
                     <button name="action_sync_index_scope"
                             type="object"
                             string="Sync index scope"
                             class="btn-secondary"
-                            invisible="is_global"
+                            attrs="{'invisible': [('is_global', '=', True)]}"
                             confirm="This deletes vectors for records that are now out of scope, and queues in-scope records that have none. The queued ones are sent to the embedding provider on the cron's next pass. Continue?"/>
                 </header>
                 <sheet>
                     <field name="is_global" invisible="1"/>
-                    <group invisible="not is_global" string="Provider">
+                    <group attrs="{'invisible': [('is_global', '=', False)]}" string="Provider">
                         <field name="provider_kind"/>
                         <field name="provider_url"/>
                         <field name="provider_api_key" password="True"/>
@@ -52,13 +52,13 @@
                         <field name="tokens_used_today"/>
                         <field name="tokens_usage_date"/>
                     </group>
-                    <group invisible="is_global" string="Indexed model">
+                    <group attrs="{'invisible': [('is_global', '=', True)]}" string="Indexed model">
                         <field name="model_name"/>
                         <field name="enabled"/>
                         <field name="text_field_path"/>
                         <field name="text_extractor"/>
                     </group>
-                    <group invisible="is_global" string="Index scope">
+                    <group attrs="{'invisible': [('is_global', '=', True)]}" string="Index scope">
                         <div class="text-muted" colspan="2">
                             Which records of this model may have their text
                             sent to the embedding provider. An empty domain
@@ -72,11 +72,11 @@
         </field>
     </record>
 
-    <record id="view_orc_embedding_config_list" model="ir.ui.view">
-        <field name="name">orc.embedding.config.list</field>
+    <record id="view_orc_embedding_config_tree" model="ir.ui.view">
+        <field name="name">orc.embedding.config.tree</field>
         <field name="model">orc.embedding.config</field>
         <field name="arch" type="xml">
-            <list string="AI Semantic Search Config">
+            <tree string="AI Semantic Search Config">
                 <field name="is_global"/>
                 <field name="model_name"/>
                 <field name="enabled"/>
@@ -84,39 +84,40 @@
                 <field name="text_field_path"/>
                 <field name="text_extractor"/>
                 <field name="provider_model"/>
-            </list>
+            </tree>
         </field>
     </record>
 
     <record id="action_orc_embedding_config" model="ir.actions.act_window">
         <field name="name">AI Semantic Search</field>
         <field name="res_model">orc.embedding.config</field>
-        <field name="view_mode">list,form</field>
+        <field name="view_mode">tree,form</field>
     </record>
 
     <!--
-        The per-article opt-out, surfaced on knowledge.article's own
-        list + search views.
+        The per-page opt-out, surfaced on document.page's own tree +
+        search views.
 
         Both xpaths target the ROOT element rather than a named field
-        or filter. Anchoring on, say, `last_edition_date` would tie
-        this module's installability to one Enterprise `knowledge`
+        or filter. Anchoring on, say, `content_date` would tie this
+        module's installability to one particular OCA `document_page`
         layout, and a missing anchor is a hard install failure — on
         Odoo.sh that surfaces as a failed build, not a warning.
 
-        The article FORM is deliberately left alone: it is a custom
-        OWL layout built from `knowledge_topbar` /
-        `knowledge_properties_panel` widgets, with no stable anchor
-        for a plain checkbox. Toggling from the list view is enough
-        for v1; a form placement needs someone who can render the
-        Enterprise view and look at it.
+        The page FORM is deliberately left alone here. Upstream this
+        was forced — Enterprise `knowledge`'s form is a custom OWL
+        layout with no stable anchor for a plain checkbox. On v15
+        `document_page.view_wiki_form` is an ordinary form and would
+        take the field, so this is parity with v18 rather than a
+        constraint; a form placement is a separate, deliberate change.
+        Toggling from the tree view is enough for v1.
     -->
-    <record id="view_knowledge_article_list_ai_exclude" model="ir.ui.view">
-        <field name="name">knowledge.article.list.orc.ai.exclude</field>
-        <field name="model">knowledge.article</field>
-        <field name="inherit_id" ref="knowledge.knowledge_article_view_tree"/>
+    <record id="view_document_page_tree_ai_exclude" model="ir.ui.view">
+        <field name="name">document.page.tree.orc.ai.exclude</field>
+        <field name="model">document.page</field>
+        <field name="inherit_id" ref="document_page.view_wiki_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//list" position="inside">
+            <xpath expr="//tree" position="inside">
                 <field name="orc_ai_index_exclude"
                        string="Excluded from AI index"
                        optional="hide"/>
@@ -124,10 +125,10 @@
         </field>
     </record>
 
-    <record id="view_knowledge_article_search_ai_exclude" model="ir.ui.view">
-        <field name="name">knowledge.article.search.orc.ai.exclude</field>
-        <field name="model">knowledge.article</field>
-        <field name="inherit_id" ref="knowledge.knowledge_article_view_search"/>
+    <record id="view_document_page_search_ai_exclude" model="ir.ui.view">
+        <field name="name">document.page.search.orc.ai.exclude</field>
+        <field name="model">document.page</field>
+        <field name="inherit_id" ref="document_page.view_wiki_filter"/>
         <field name="arch" type="xml">
             <xpath expr="//search" position="inside">
                 <separator/>

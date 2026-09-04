@@ -328,7 +328,7 @@ def _last_report_key(env):
     visible to the raw SELECT.
     """
     ICP = env["ir.config_parameter"].sudo()
-    ICP.flush_model(["key", "value"])
+    ICP.flush(["key", "value"])
     env.cr.execute(
         "SELECT value FROM ir_config_parameter WHERE key = %s",
         (_PARAM_LAST_REPORT,),

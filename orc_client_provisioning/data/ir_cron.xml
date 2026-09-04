@@ -6,10 +6,11 @@
         interval=1d / nextcall=install-time, which landed them in the
         same minute and serialised on res.users locks.
 
-        The pre-migration at migrations/18.0.1.2.0/pre-migration.py
-        removes the old three records (ir_cron_orc_rotate_keys,
-        ir_cron_orc_reconcile, ir_cron_orc_orphan_cleanup) on upgrade
-        so they don't linger as orphan rows.
+        Upstream carried a pre-migration removing the old three
+        records (ir_cron_orc_rotate_keys, ir_cron_orc_reconcile,
+        ir_cron_orc_orphan_cleanup). The v15 line never shipped them —
+        its first release already had these two — so there is nothing
+        to clean up and no such migration on this branch.
     -->
 
     <!-- HOURLY — reconcile + role-drift-driven rotation. Fast, safe,

@@ -1,9 +1,10 @@
-# odoo-orc-client
+# odoo-orc-client — 15.0
 
-Odoo 18 addons that connect a client's Odoo instance to the OpsWay ORC
-(OpenACP Reasoning Cloud) platform.
+Odoo 15 addons that connect a client's Odoo instance to the OpsWay ORC
+(OpenACP Reasoning Cloud) platform. This is the **15.0** branch; `main`
+carries the Odoo 18 line and is where changes land first.
 
-Two addons, meant to be installed in order:
+Four addons. The first two are meant to be installed in order:
 
 1. **`orc_client_provisioning`** — admin picks which users get ORC
    access; addon auto-creates Odoo API keys, ships them to ORC, rotates
@@ -16,6 +17,53 @@ Two addons, meant to be installed in order:
    modal override, AUP acceptance embedded in the Create dialog, local
    mirror of tasks with unread counts and sync cron. Depends on
    `orc_client_provisioning`. **Phase 2, ships after Phase 1 is live.**
+
+3. **`orc_client_semantic_search`** — permission-aware semantic search
+   over `document.page` records, exposed as a single XML-RPC method the
+   agent calls as the end user, so Odoo's own `ir.rule` decides what it
+   may see. Returns refs only.
+
+4. **`orc_client_build_reporter`** — reports each Odoo.sh build's
+   `(sha → build_id, dev URL)` so the developer-flow agent can find the
+   right dev server without a GitHub token, and lets a rebuilt staging
+   branch reconnect itself to ORC. `auto_install`.
+
+## Odoo 15 and neutralization — read this before relying on staging
+
+Odoo grew per-module neutralization (`odoo.modules.neutralize`, which
+executes each addon's `data/neutralize.sql`) in **16.0**. Version 15 has none
+of it, so on this branch **neither addon's `neutralize.sql` ever runs**, even
+though both files are present and correct.
+
+Left alone, that means a rebuilt Odoo.sh staging branch comes up still holding
+the endpoint, Bearer token and infrastructure id of whatever database its dump
+came from — normally production. The copy authenticates as production, and
+because the parameters are present it never reconnects to a staging ORC
+either.
+
+`orc_client_build_reporter` closes this on v15 with `sanitize_if_rebuilt`
+(`models/enrollment.py`), which detects a restore by **build identity** rather
+than a neutralize flag: credentials are stamped with the build they were
+issued to (`orc.bound_build`), and a stamp naming a different build is taken
+as proof they arrived in a dump. It clears them, and enrollment then requests
+credentials of this build's own.
+
+Three things bound it, and each matters:
+
+- it acts only when `ODOO_STAGE` is explicitly `staging` or `dev` — Odoo.sh
+  **production** database names carry a build id too, and it changes on every
+  deploy, so identity alone would have production delete its own live
+  credentials;
+- it deletes only credentials that carry a stamp, so a hand-configured
+  instance is never touched — such an instance adopts the current build
+  instead, and the rebuild after that sanitizes normally;
+- a stamp naming the running build means the dump was restored over itself,
+  and the credentials stay.
+
+**Without `orc_client_build_reporter` installed**, a v15 operator must clear
+`orc.endpoint_url`, `orc.org_token`, `orc.infrastructure_id`,
+`orc.rotation_days` and `orc.enroll_secret` by hand after every staging
+rebuild.
 
 ## Repository layout (for submodule users)
 
@@ -31,7 +79,10 @@ the parent repo. See `../docs/` there for endpoint contracts.
 
 ## Requirements
 
-- Odoo 18.0 or later
+- Odoo 15.0
+- OCA `document_page` (from `OCA/knowledge`) — `orc_client_semantic_search`
+  indexes `document.page`, the v15 stand-in for what is `knowledge.article`
+  on the 18.0 line
 - Outbound HTTPS from the Odoo instance to the ORC endpoint
 - ORC-side `odoo-client`-scoped org API token (minted by OpsWay super-admin
   via `orc_api_tokens.scopes @> ARRAY['odoo-client']`)

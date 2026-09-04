@@ -65,7 +65,7 @@ class TestResolveWebhookBase(TransactionCase):
         self.ICP = self.env["ir.config_parameter"].sudo()
 
     def _read(self):
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         return reporter._resolve_webhook_base(self.env)
 
     def test_icp_overrides_in_source_constant(self):
@@ -131,7 +131,7 @@ class TestRegisterHook(TransactionCase):
             reporter._PARAM_WEBHOOK_BASE,
             "https://orc.test/webhook/odoo-sh/build-ready",
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.modules = self.env["ir.module.module"]
 
     def _fire(self, **config_overrides):
@@ -172,7 +172,7 @@ class TestRegisterHook(TransactionCase):
 
     def test_no_thread_without_webhook_base(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, False)
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         with mock.patch.object(reporter, "WEBHOOK_BASE", ""):
             self._fire().assert_not_called()
 

@@ -30,7 +30,7 @@ def share_test_cursor(case):
     """
     if hasattr(case, "registry_enter_test_mode"):  # 19.0+
         case.registry_enter_test_mode()
-    else:  # 18.0
+    else:  # 15.0 / 18.0
         case.registry.enter_test_mode(case.cr)
         case.addCleanup(case.registry.leave_test_mode)
 

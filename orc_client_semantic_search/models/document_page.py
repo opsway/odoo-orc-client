@@ -8,7 +8,9 @@ from .orc_embedding_config import EXCLUDE_FIELD
 _logger = logging.getLogger(__name__)
 
 
-# Hooks `create`, `write`, and `unlink` on `knowledge.article`.
+# Hooks `create`, `write`, and `unlink` on `document.page`
+# (OCA `knowledge` repo's wiki model — the v15 stand-in for
+# what was `knowledge.article` upstream).
 #
 # - create: always enqueue. The cron will hash-skip if the body is
 #   identical to a vector that was somehow already there
@@ -21,21 +23,21 @@ _logger = logging.getLogger(__name__)
 #   surface as 404s the moment the agent tries to read them.
 #
 # All three hooks touch orc.embedding* with `sudo()`: those are
-# technical models the end user has no rights on, and the article
+# technical models the end user has no rights on, and the page
 # author must not need any. Only the bookkeeping is elevated — the
-# article recordset itself stays on the caller's environment, so
+# page recordset itself stays on the caller's environment, so
 # ir.rule keeps deciding what they may write and delete.
-class KnowledgeArticle(models.Model):
-    _inherit = "knowledge.article"
+class DocumentPage(models.Model):
+    _inherit = "document.page"
 
     orc_ai_index_exclude = fields.Boolean(
         string="Exclude from AI index",
         default=False,
         index=True,
-        help="Keep this article out of the semantic-search index. Its "
+        help="Keep this page out of the semantic-search index. Its "
              "text is then never sent to the embedding provider, and any "
              "vector it already has is deleted on the next indexing "
-             "pass. The assistant can still read the article the normal "
+             "pass. The assistant can still read the page the normal "
              "way if you have access to it — it just can't find it by "
              "meaning.",
     )
@@ -57,7 +59,7 @@ class KnowledgeArticle(models.Model):
         # here either.
         cfg = self.env["orc.embedding.config"].sudo().search([
             ("is_global", "=", False),
-            ("model_name", "=", "knowledge.article"),
+            ("model_name", "=", "document.page"),
             ("enabled", "=", True),
         ], limit=1)
         if not cfg:
@@ -65,23 +67,26 @@ class KnowledgeArticle(models.Model):
 
         # Three kinds of write can change what the index should hold:
         #
-        # - the indexed text itself;
+        # - the indexed text itself. On v15 `content` is computed
+        #   with an inverse (the text lives on
+        #   document.page.history), but an edit still arrives here as
+        #   `content` in `vals`, so watching it by name is correct;
         # - the exclusion flag. Without it here, ticking the box does
         #   nothing until the body happens to change — and a control
         #   that takes effect at an unrelated later moment is
         #   indistinguishable from one that doesn't work;
         # - any field the configured domain reads. With a domain of
-        #   [("category", "!=", "private")], moving an article into
-        #   the private category takes it out of scope, and the vector
-        #   has to go with it. Nothing about `category` is special —
-        #   the fields come from the domain, so they change when the
-        #   operator changes it.
+        #   [("parent_id", "!=", private_category_id)], moving a page
+        #   into the private category takes it out of scope, and the
+        #   vector has to go with it. Nothing about `parent_id` is
+        #   special — the fields come from the domain, so they change
+        #   when the operator changes it.
         #
         # Both flag directions enqueue: setting it makes the sweep
         # delete the vector, clearing it makes the sweep rebuild it.
         # An enqueue that turns out to be unnecessary costs no
         # provider call — the sweep's hash-skip absorbs it.
-        watched = {cfg.text_field_path or "body", EXCLUDE_FIELD}
+        watched = {cfg.text_field_path or "content", EXCLUDE_FIELD}
         watched |= cfg._index_domain_fields()
         if watched & set(vals):
             self._orc_enqueue_reindex()
@@ -93,11 +98,11 @@ class KnowledgeArticle(models.Model):
         ids = self.ids
         if ids:
             Embedding.search([
-                ("model", "=", "knowledge.article"),
+                ("model", "=", "document.page"),
                 ("res_id", "in", ids),
             ]).unlink()
             Queue.search([
-                ("model", "=", "knowledge.article"),
+                ("model", "=", "document.page"),
                 ("res_id", "in", ids),
             ]).unlink()
         return super().unlink()
@@ -118,7 +123,7 @@ class KnowledgeArticle(models.Model):
         purely on scope would mean ticking "Exclude from AI index"
         enqueues nothing, and the vector the box is meant to remove
         outlives the decision to remove it. Filtering on neither would
-        mean every excluded article gets a marker on every save, for
+        mean every excluded page gets a marker on every save, for
         the sweep to discard — churn that also hides the useful
         signal in the queue length.
         """
@@ -129,7 +134,7 @@ class KnowledgeArticle(models.Model):
 
         cfg = Config.search([
             ("is_global", "=", False),
-            ("model_name", "=", "knowledge.article"),
+            ("model_name", "=", "document.page"),
         ], limit=1)
         if not cfg:
             return
@@ -139,7 +144,7 @@ class KnowledgeArticle(models.Model):
         out_of_scope_ids = [r.id for r in self if r.id not in in_scope_ids]
         if out_of_scope_ids:
             stale_ids = set(self.env["orc.embedding"].sudo().search([
-                ("model", "=", "knowledge.article"),
+                ("model", "=", "document.page"),
                 ("res_id", "in", out_of_scope_ids),
             ]).mapped("res_id"))
 
@@ -148,11 +153,11 @@ class KnowledgeArticle(models.Model):
             return
 
         existing_ids = set(Queue.search([
-            ("model", "=", "knowledge.article"),
+            ("model", "=", "document.page"),
             ("res_id", "in", list(wanted)),
         ]).mapped("res_id"))
         to_create = [
-            {"model": "knowledge.article", "res_id": rid}
+            {"model": "document.page", "res_id": rid}
             for rid in sorted(wanted - existing_ids)
         ]
         if to_create:

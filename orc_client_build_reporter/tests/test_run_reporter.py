@@ -68,7 +68,7 @@ class TestRunReporter(TransactionCase):
         # mechanism and exercising it here doubles as coverage.
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, self.WEBHOOK_BASE)
         self.ICP.set_param(reporter._PARAM_LAST_REPORT, False)
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         # Each test starts with no Odoo.sh env hints; individual tests opt in.
         self._saved_env = {
             k: os.environ.pop(k, None)
@@ -110,7 +110,7 @@ class TestRunReporter(TransactionCase):
 
     def _run(self, dbname=None, **overrides):
         """Drive one reporter run the way `_register_hook` does."""
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         webhook_base = overrides.get(
             "webhook_base", reporter._resolve_webhook_base(self.env),
         )
@@ -159,7 +159,7 @@ class TestRunReporter(TransactionCase):
         self.assertNotIn("Authorization", headers)
         self.assertEqual(kwargs["timeout"], 10)
 
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.assertEqual(
             self.ICP.get_param(reporter._PARAM_LAST_REPORT),
             f"{self.SHA}:{self.BUILD_ID}:dev",
@@ -220,7 +220,7 @@ class TestRunReporter(TransactionCase):
 
     def test_skip_when_webhook_base_missing(self):
         self.ICP.set_param(reporter._PARAM_WEBHOOK_BASE, False)
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         with mock.patch.object(reporter, "WEBHOOK_BASE", ""):
             self._run_and_assert_no_post(self._stack_patches())
 
@@ -237,7 +237,7 @@ class TestRunReporter(TransactionCase):
             reporter._PARAM_LAST_REPORT,
             f"{self.SHA}:{self.BUILD_ID}:dev",
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self._run_and_assert_no_post(self._stack_patches())
 
     def test_same_sha_new_build_id_reposts(self):
@@ -247,7 +247,7 @@ class TestRunReporter(TransactionCase):
             reporter._PARAM_LAST_REPORT,
             f"{self.SHA}:99999999:dev",
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self._start(self._stack_patches())
         with mock.patch.object(
             reporter.requests, "post", return_value=self._fake_response(),
@@ -262,7 +262,7 @@ class TestRunReporter(TransactionCase):
             reporter._PARAM_LAST_REPORT,
             f"{self.SHA}:{self.BUILD_ID}:dev",
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         os.environ["ODOO_STAGE"] = "staging"
         self._start(self._stack_patches())
         with mock.patch.object(
@@ -282,7 +282,7 @@ class TestRunReporter(TransactionCase):
                 mock.patch.object(reporter.requests, "post") as m_post:
             self._run()
         m_post.assert_not_called()
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.assertFalse(
             self.ICP.get_param(reporter._PARAM_LAST_REPORT),
             "a worker that lost the lock must not stamp either",
@@ -298,7 +298,7 @@ class TestRunReporter(TransactionCase):
                 ) as m_post:
             self._run()
         m_post.assert_called_once()
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.assertEqual(
             self.ICP.get_param(reporter._PARAM_LAST_REPORT),
             f"{self.SHA}:{self.BUILD_ID}:dev",
@@ -330,14 +330,14 @@ class TestRunReporter(TransactionCase):
             self._run()
 
             m_post.assert_called_once()
-            self.env.invalidate_all()
+            self.env.cache.invalidate()
             self.assertEqual(
                 self.ICP.get_param(reporter._PARAM_LAST_REPORT),
                 f"{self.SHA}:{self.BUILD_ID}:dev",
             )
 
             self.ICP.set_param(reporter._PARAM_LAST_REPORT, False)
-            self.env.invalidate_all()
+            self.env.cache.invalidate()
             self._run()
 
         self.assertEqual(
@@ -395,7 +395,7 @@ class TestRunReporter(TransactionCase):
             side_effect=[bad, self._fake_response()],
         ) as m_post:
             self._run()                           # fails → must not stamp
-            self.env.invalidate_all()
+            self.env.cache.invalidate()
             self.assertFalse(
                 self.ICP.get_param(reporter._PARAM_LAST_REPORT),
                 "debounce key must not be stamped after a failed POST",
@@ -406,7 +406,7 @@ class TestRunReporter(TransactionCase):
             m_post.call_count, 2,
             "the run after a failed POST must retry, not skip",
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.assertEqual(
             self.ICP.get_param(reporter._PARAM_LAST_REPORT),
             f"{self.SHA}:{self.BUILD_ID}:dev",

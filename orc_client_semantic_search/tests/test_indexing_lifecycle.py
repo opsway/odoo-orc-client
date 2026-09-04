@@ -29,19 +29,19 @@ class IndexingLifecycleTests(SweepCase):
 
     def test_create_enqueues_marker(self):
         Queue = self.env["orc.embedding.queue"]
-        before = Queue.search_count([("model", "=", "knowledge.article")])
-        article = self.env["knowledge.article"].create({
-            "name": "Lifecycle test", "body": "<p>content</p>",
+        before = Queue.search_count([("model", "=", "document.page")])
+        article = self.env["document.page"].create({
+            "name": "Lifecycle test", "content": "<p>content</p>",
         })
         after = Queue.search_count([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ])
         self.assertEqual(after, 1, "create() must enqueue exactly one marker")
         self.assertGreaterEqual(Queue.search_count([]), before + 1)
 
     def test_cron_processes_queue_into_embedding_row(self):
-        article = self.env["knowledge.article"].create({
-            "name": "Cron test", "body": "<p>hello world</p>",
+        article = self.env["document.page"].create({
+            "name": "Cron test", "content": "<p>hello world</p>",
         })
 
         provider = self._stub_provider()
@@ -54,7 +54,7 @@ class IndexingLifecycleTests(SweepCase):
 
         Embedding = self.env["orc.embedding"]
         row = Embedding.search([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ], limit=1)
         self.assertTrue(row, "expected an orc.embedding row after the sweep")
         self.assertTrue(row.content_hash)
@@ -65,13 +65,13 @@ class IndexingLifecycleTests(SweepCase):
         # And the queue marker for that record must be gone.
         Queue = self.env["orc.embedding.queue"]
         leftover = Queue.search_count([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ])
         self.assertEqual(leftover, 0)
 
     def test_provider_failure_keeps_queue_row_and_increments_attempts(self):
-        article = self.env["knowledge.article"].create({
-            "name": "Failure test", "body": "<p>x</p>",
+        article = self.env["document.page"].create({
+            "name": "Failure test", "content": "<p>x</p>",
         })
 
         provider = MagicMock()
@@ -90,7 +90,7 @@ class IndexingLifecycleTests(SweepCase):
 
         Queue = self.env["orc.embedding.queue"]
         row = Queue.search([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ], limit=1)
         self.assertTrue(row, "queue marker should remain after a provider error")
         self.assertEqual(row.attempts, 1)
@@ -100,8 +100,8 @@ class IndexingLifecycleTests(SweepCase):
         # Article unlinked → its orc.embedding row goes too. We
         # don't want stale ids in the index that would only be
         # noticed when the agent tries to read a 404.
-        article = self.env["knowledge.article"].create({
-            "name": "Delete cascade test", "body": "<p>x</p>",
+        article = self.env["document.page"].create({
+            "name": "Delete cascade test", "content": "<p>x</p>",
         })
 
         provider = self._stub_provider()
@@ -114,25 +114,25 @@ class IndexingLifecycleTests(SweepCase):
 
         Embedding = self.env["orc.embedding"]
         before = Embedding.search_count([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ])
         self.assertEqual(before, 1)
 
         article.unlink()
 
         after = Embedding.search_count([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ])
         self.assertEqual(after, 0)
 
     def test_long_article_falls_back_to_first_8k_chars(self):
-        # >8K-char body → embed first 8K, log a warning. We pin the
+        # >8K-char content → embed first 8K, log a warning. We pin the
         # warning being captured on the queue row's last_error
         # field at index time so operators can see what was
         # truncated.
-        long_body = "<p>" + ("alpha beta gamma " * 1000) + "</p>"
-        article = self.env["knowledge.article"].create({
-            "name": "Long article", "body": long_body,
+        long_content = "<p>" + ("alpha beta gamma " * 1000) + "</p>"
+        article = self.env["document.page"].create({
+            "name": "Long page", "content": long_content,
         })
 
         provider = self._stub_provider()
@@ -152,6 +152,6 @@ class IndexingLifecycleTests(SweepCase):
 
         Embedding = self.env["orc.embedding"]
         row = Embedding.search([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ], limit=1)
         self.assertEqual(row.text_excerpt_len, len(sent_texts[0]))

@@ -44,7 +44,7 @@ class ResUsers(models.Model):
     #     Workplace's cross-connection setup-key probe can see it — see
     #     `_orc_generate_api_key`). Odoo runs cursors at REPEATABLE READ, so
     #     the transaction doing the provisioning cannot resolve the id it was
-    #     just handed. `web_save` reads every form field back in that same
+    #     just handed. A form save reads every form field back in that same
     #     transaction, so rendering the relation raised MissingError and rolled
     #     the whole save back — no UI provisioning was possible at all.
     #  2. `res.users.apikeys` is `_auto=False` and core GCs expired keys with a
@@ -264,9 +264,6 @@ class ResUsers(models.Model):
         REPEATABLE READ snapshot cannot see the just-committed row.
         """
         self.ensure_one()
-        icp = self.env["ir.config_parameter"].sudo()
-        rotation_days = int(icp.get_param("orc.rotation_days") or 30)
-        expiration = fields.Datetime.add(fields.Datetime.now(), days=rotation_days)
         try:
             # Own cursor → commits on clean exit, so the row is visible to AI
             # Workplace's cross-connection probe before the caller pushes it.
@@ -276,7 +273,19 @@ class ResUsers(models.Model):
                     key_env["res.users.apikeys"]
                     .with_user(self.id)
                     .sudo()
-                    ._generate(scope=None, name=ORC_KEY_NAME, expiration_date=expiration)
+                    # v15's `_generate(scope, name)` takes no expiry: this
+                    # version of `res.users.apikeys` has no expiration column
+                    # (name, user_id, scope, create_date, and that is all), and
+                    # no `_gc_user_apikeys` to act on one. Core gained the
+                    # argument later. Nothing is lost here that the addon was
+                    # relying on — `_cron_orc_maintenance` rotates on
+                    # `orc_last_rotation_at` against `orc.rotation_days` and
+                    # never consults a core expiry — but note the difference:
+                    # on v15 that cron is the ONLY thing that retires a
+                    # managed key, with no server-side backstop behind it. A
+                    # database whose crons stay disabled keeps its keys for
+                    # ever.
+                    ._generate(scope=None, name=ORC_KEY_NAME)
                 )
                 # Capture the id HERE, inside the generating cursor, where the
                 # row is unambiguously visible. Re-searching from the *outer*
@@ -1067,7 +1076,7 @@ class ResUsers(models.Model):
                 self.env.cr.rowcount,
             )
         # Drop any cached values read before the UPDATE.
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
 
         # Reverse direction — key rows no user points at.
         #

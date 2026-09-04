@@ -21,9 +21,9 @@ class HashSkipTests(SweepCase):
         )
         self.config.write({"provider_api_key": "sk-test"})
 
-        self.article = self.env["knowledge.article"].create({
+        self.article = self.env["document.page"].create({
             "name": "Hash skip test article",
-            "body": "<p>same text</p>",
+            "content": "<p>same text</p>",
         })
 
     def _stub_provider(self, dim=4):
@@ -36,7 +36,7 @@ class HashSkipTests(SweepCase):
         mock.dim = dim
         return mock
 
-    def test_unchanged_body_is_not_re_embedded(self):
+    def test_unchanged_content_is_not_re_embedded(self):
         Embedding = self.env["orc.embedding"]
 
         provider = self._stub_provider()
@@ -53,7 +53,7 @@ class HashSkipTests(SweepCase):
             Embedding._cron_reindex_sweep()
             self.assertEqual(provider.embed.call_count, first_call_count)
 
-    def test_changed_body_triggers_re_embed(self):
+    def test_changed_content_triggers_re_embed(self):
         Embedding = self.env["orc.embedding"]
 
         provider = self._stub_provider()
@@ -65,8 +65,8 @@ class HashSkipTests(SweepCase):
             Embedding._cron_reindex_sweep()
             initial_calls = provider.embed.call_count
 
-            # Edit the body — write hook enqueues — sweep re-embeds.
-            self.article.body = "<p>different text now</p>"
+            # Edit the content — write hook enqueues — sweep re-embeds.
+            self.article.content = "<p>different text now</p>"
             Embedding._cron_reindex_sweep()
             self.assertGreater(provider.embed.call_count, initial_calls)
 
@@ -88,6 +88,6 @@ class HashSkipTests(SweepCase):
             # Touch a non-indexed field. Whether the queue marker
             # is created at all is up to the write hook; either way
             # the cron must not call embed.
-            self.article.write({"name": "Renamed but same body"})
+            self.article.write({"name": "Renamed but same content"})
             Embedding._cron_reindex_sweep()
             self.assertEqual(provider.embed.call_count, initial_calls)

@@ -670,7 +670,7 @@ class OrcEmbeddingConfig(models.Model):
         synchronisation the ORM would otherwise do for us.
         """
         self.ensure_one()
-        self.flush_recordset(["tokens_used_today", "tokens_usage_date"])
+        self.flush(["tokens_used_today", "tokens_usage_date"], self)
         with self.pool.cursor() as cr:
             cr.execute(
                 "SELECT tokens_used_today, tokens_usage_date "
@@ -730,7 +730,7 @@ class OrcEmbeddingConfig(models.Model):
         3. **Flushed first.** Same reason as in
            ``_token_budget_state``, but the consequence is worse: a
            pending ORM write to the counter is flushed *after* this
-           statement — ``invalidate_recordset`` below triggers it —
+           statement — ``invalidate_cache`` below triggers it —
            and overwrites the increment with the stale cached value.
            The charge is then lost while the money stays spent.
 
@@ -744,7 +744,7 @@ class OrcEmbeddingConfig(models.Model):
         self.ensure_one()
         if tokens <= 0:
             return
-        self.flush_recordset(["tokens_used_today", "tokens_usage_date"])
+        self.flush(["tokens_used_today", "tokens_usage_date"], self)
         with self.pool.cursor() as cr:
             cr.execute(
                 """
@@ -763,7 +763,7 @@ class OrcEmbeddingConfig(models.Model):
                     "id": self.id,
                 },
             )
-        self.invalidate_recordset(["tokens_used_today", "tokens_usage_date"])
+        self.invalidate_cache(["tokens_used_today", "tokens_usage_date"], self.ids)
 
     # --------------------------------------------------------- API
 

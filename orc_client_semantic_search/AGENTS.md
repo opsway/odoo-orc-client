@@ -7,7 +7,7 @@ repo, not here.
 
 ## What this module is
 
-A self-contained Odoo 18 addon that:
+A self-contained Odoo 15 addon that:
 1. Listens to `create`/`write` on configured models.
 2. Enqueues a reindex marker per affected record.
 3. A cron sweeps the queue, calls the configured embedding provider,
@@ -20,7 +20,7 @@ The full contract is in `README.md`. Read it before making changes.
 ## Non-negotiables (will be reverted in review)
 
 - **Refs-only response.** `semantic_search` returns `model + id +
-  score`. Never titles, snippets, or body excerpts. Single
+  score`. Never titles, snippets, or content excerpts. Single
   permission enforcement layer is the read step downstream.
 - **No gateway dependency for embed or search.** This module calls
   the provider directly, configured per-tenant in Odoo Settings.
@@ -53,7 +53,7 @@ implementation**. Apply the same order when adding to it:
 
 ## Coding conventions
 
-- **Manifest**: `version` follows Odoo's `18.0.X.Y` pattern, same as
+- **Manifest**: `version` follows Odoo's `15.0.X.Y` pattern, same as
   the sibling addons in this repo.
 - **License**: LGPL-3, matching the parent repo.
 - **Logger**: one logger per module file via
@@ -102,7 +102,7 @@ enough that a `requests.post` is clearer than a 50MB SDK.
 
 - Set `daily_token_cap=0` in Settings to pause the cron without
   uninstalling. (This is now enforced. Between the module's first
-  release and 18.0.0.3.0 the field was declared, rendered and
+  release and 15.0.0.3.0 the field was declared, rendered and
   documented but read by nothing, so the tip was false and the cap
   was not a cost or privacy control at all.)
 - The "Test provider" button issues a single embed of `"ping"` and

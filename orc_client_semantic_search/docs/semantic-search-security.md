@@ -1,7 +1,7 @@
 # Semantic search — security and visibility
 
 A business-user explainer for how the AI Workplace assistant finds
-information in the Odoo knowledge base, and why it can never
+information in the Odoo document pages, and why it can never
 show a user content they wouldn't be allowed to read — even when
 an article containing the answer exists.
 
@@ -32,7 +32,7 @@ assistant:
 
 > *"How do I set up Outlook on my new company laptop?"*
 
-The knowledge base contains four articles whose content matches
+The wiki contains four pages whose content matches
 this question. Some are tagged as internal to the IT team; some
 are available to all employees.
 
@@ -109,7 +109,7 @@ the internal PowerShell scripts.
 
 | Business question                                              | Answer                                                                                                                                |
 |----------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Do we need to configure separate permissions for the assistant? | No. The rules you already have in Odoo on knowledge base articles apply to the assistant in exactly the same way.                     |
+| Do we need to configure separate permissions for the assistant? | No. The rules you already have in Odoo on document pages apply to the assistant in exactly the same way.                     |
 | Does the assistant "see" all articles and just filter display?  | No. The assistant gets *access denied* from Odoo on restricted articles — it never has their content in memory.                       |
 | Are assistant operations auditable?                             | Yes. Every article read by the assistant is an Odoo call identical to a manual click — recorded in standard Odoo logs.               |
 | What if Anna should see #287 but Odoo refuses?                  | The admin checks the access rules on that one article in Odoo. The assistant requires no separate configuration.                      |
@@ -140,7 +140,7 @@ a separate step, and it is the one that sends data outside.
 To turn an article into a vector, its text is sent once to the
 embedding provider configured in Settings — OpenAI by default, under
 **your own** account and API key. This happens at index time: when
-the article is created, when its body is edited, or when an
+the page is created, when its content is edited, or when an
 administrator runs a reindex. It does not happen when someone asks a
 question (only the question itself is sent then), and no end user is
 involved or present.
@@ -191,5 +191,5 @@ account. Decide scope before setting the API key, not after.
 - **Indexing is the exception to "permissions are the single source
   of truth."** Access rules decide who may read; they do not decide
   what is sent to the embedding provider. Set the index scope for
-  that, and review it whenever the knowledge base takes on a new
+  that, and review it whenever the wiki takes on a new
   category of content.

@@ -2,8 +2,8 @@
 
 ``orc.embedding*`` are technical models gated to
 ``base.group_system`` (README "Permission model"). A plain internal
-user editing a knowledge article must not be asked for rights on
-them — before the bookkeeping was sudo'd, creating an article raised
+user editing a wiki page must not be asked for rights on them —
+before the bookkeeping was sudo'd, creating a page raised
 "You are not allowed to access 'orc.embedding.queue' records".
 
 The same applies to ``semantic_search``: the agent calls it as the
@@ -33,56 +33,68 @@ class NonAdminAccessTests(TransactionCase):
         assert cls.config, "the module data must ship a global config row"
         cls.config.write({"provider_api_key": "sk-test", "vector_dim": 4})
 
-        # A plain internal user: no Settings access, so no rights on
-        # any of the orc.embedding* models.
+        # A plain internal user with document_page's own Manager group and
+        # nothing else. `base.group_user` alone cannot author a page on v15 —
+        # document_page's ACLs grant write/create to Editor and unlink to
+        # Manager — and Manager is what the unlink assertion below needs.
+        # Crucially it does NOT imply base.group_system, so the user still has
+        # no rights on any orc.embedding* model, which is the whole point.
         cls.user = cls.env["res.users"].create({
             "name": "Semantic Search Editor",
             "login": "orc_semantic_editor",
-            "groups_id": [(6, 0, [cls.env.ref("base.group_user").id])],
+            "groups_id": [(6, 0, [
+                cls.env.ref("base.group_user").id,
+                cls.env.ref("document_page.group_document_manager").id,
+            ])],
         })
 
     def _queue_count(self, article_id):
         # Counted as the superuser — the test user can't read the queue.
         return self.env["orc.embedding.queue"].sudo().search_count([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article_id),
+            ("model", "=", "document.page"), ("res_id", "=", article_id),
         ])
 
-    def test_internal_user_can_author_articles(self):
-        Article = self.env["knowledge.article"].with_user(self.user)
+    def test_internal_user_can_author_pages(self):
+        Article = self.env["document.page"].with_user(self.user)
 
         article = Article.create({
             "name": "Written by a regular employee",
-            "body": "<p>first draft</p>",
+            "content": "<p>first draft</p>",
         })
         self.assertEqual(
             self._queue_count(article.id), 1,
             "create() by a non-admin must still enqueue a re-index marker",
         )
 
-        # Body is the watched field for knowledge.article, so this
-        # goes down the enqueue path rather than the early return.
-        article.write({"body": "<p>second draft</p>"})
+        # `content` is the watched field for document.page, so this goes
+        # down the enqueue path rather than the early return. It is a
+        # computed field with an inverse, but an edit still arrives in
+        # `vals` under that name.
+        article.write({"content": "<p>second draft</p>"})
         self.assertEqual(
             self._queue_count(article.id), 1,
             "re-enqueueing an already-queued record must stay a no-op",
         )
 
-        # Deleting is a soft archive for an internal user (knowledge
-        # keeps unlink for the system group + its trash cron), and it
-        # runs through the same write hook.
-        article.action_send_to_trash()
-        self.assertFalse(article.active)
+        # Deleting is a real unlink on v15 (document_page has no trash
+        # cron; Manager holds the unlink right), and it runs through the
+        # `unlink` hook — which is the stronger case for this test, because
+        # that hook is the one that reaches into orc.embedding* to drop the
+        # rows. A non-admin must not be asked for rights to do it.
+        article_id = article.id
+        article.unlink()
+        self.assertEqual(self._queue_count(article_id), 0)
 
     def test_semantic_search_runs_as_the_end_user(self):
-        article = self.env["knowledge.article"].create({
-            "name": "Indexed", "body": "<p>x</p>",
+        article = self.env["document.page"].create({
+            "name": "Indexed", "content": "<p>x</p>",
         })
         # Start from an empty index so the ranking below only has
         # the row seeded here to work with.
         self.env["orc.embedding.queue"].sudo().search([]).unlink()
         self.env["orc.embedding"].sudo().search([]).unlink()
         self.env["orc.embedding"].sudo().create({
-            "model": "knowledge.article",
+            "model": "document.page",
             "res_id": article.id,
             "vector_blob": _VECTOR,
             "content_hash": "h1",

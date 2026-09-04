@@ -23,9 +23,9 @@ class IndexScopeTests(SweepCase):
         self.global_cfg.write({"provider_api_key": "sk-test"})
         self.cfg = Config.search([
             ("is_global", "=", False),
-            ("model_name", "=", "knowledge.article"),
+            ("model_name", "=", "document.page"),
         ], limit=1)
-        self.Article = self.env["knowledge.article"]
+        self.Article = self.env["document.page"]
         self.Embedding = self.env["orc.embedding"]
         self.Queue = self.env["orc.embedding.queue"]
 
@@ -50,29 +50,44 @@ class IndexScopeTests(SweepCase):
 
     def _embedding_of(self, article):
         return self.Embedding.search([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ], limit=1)
 
     def _queued(self, article):
         return self.Queue.search_count([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ])
+
+    def _categories(self):
+        """Two category pages, and a queue cleared of them.
+
+        Category pages are `document.page` records too, so creating them
+        trips the create hook. Their own markers would then be swept and
+        charged for — `_compute_content` gives a category the rendered page
+        index, which is real text — and would break the negative assertions
+        that follow. Clearing the queue here keeps each test measuring only
+        the page it created.
+        """
+        private = self.Article.create({"name": "Private", "type": "category"})
+        shared = self.Article.create({"name": "Shared", "type": "category"})
+        self.Queue.search([]).unlink()
+        return private, shared
 
     # ------------------------------------------- the per-record flag
 
     def test_create_with_exclude_flag_never_enqueues(self):
         article = self.Article.create({
-            "name": "Secret", "body": "<p>x</p>",
+            "name": "Secret", "content": "<p>x</p>",
             "orc_ai_index_exclude": True,
         })
         self.assertEqual(self._queued(article), 0)
 
     def test_setting_the_flag_enqueues_and_the_sweep_deletes_the_vector(self):
         # The flag is a writer. Flipping it must enqueue even though
-        # the body did not change — otherwise the vector survives
+        # the content did not change — otherwise the vector survives
         # until the next unrelated edit, which is indistinguishable
         # from the control not working.
-        article = self.Article.create({"name": "A", "body": "<p>hello</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>hello</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article), "precondition: indexed")
 
@@ -92,7 +107,7 @@ class IndexScopeTests(SweepCase):
 
     def test_clearing_the_flag_reindexes(self):
         article = self.Article.create({
-            "name": "A", "body": "<p>hello</p>",
+            "name": "A", "content": "<p>hello</p>",
             "orc_ai_index_exclude": True,
         })
         self._sweep()
@@ -107,13 +122,13 @@ class IndexScopeTests(SweepCase):
 
     def test_domain_excluded_record_is_not_enqueued(self):
         self.cfg.write({"index_domain": '[("name", "!=", "Skip me")]'})
-        article = self.Article.create({"name": "Skip me", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Skip me", "content": "<p>x</p>"})
         self.assertEqual(self._queued(article), 0)
 
     def test_domain_tightened_after_enqueue_drops_the_pending_row(self):
         # The sweep is the authoritative gate: a queue row can
         # outlive the settings that created it.
-        article = self.Article.create({"name": "Later excluded", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Later excluded", "content": "<p>x</p>"})
         self.assertEqual(self._queued(article), 1)
 
         self.cfg.write({"index_domain": '[("name", "!=", "Later excluded")]'})
@@ -130,10 +145,10 @@ class IndexScopeTests(SweepCase):
         # waiting forever.
         #
         # An earlier version of this test re-enqueued by hand
-        # (`article.write({"body": ...})`) before sweeping, and passed
+        # (`article.write({"content": ...})`) before sweeping, and passed
         # against code that never purged on save at all. Do not
         # reintroduce a nudge here: the nudge was the bug.
-        article = self.Article.create({"name": "Purge me", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Purge me", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -145,7 +160,7 @@ class IndexScopeTests(SweepCase):
         )
 
     def test_disabling_the_model_row_purges_its_vectors(self):
-        article = self.Article.create({"name": "A", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -156,7 +171,7 @@ class IndexScopeTests(SweepCase):
         # Widening costs money. It must stay behind an explicit,
         # confirmed action rather than happening on Save.
         self.cfg.write({"index_domain": '[("name", "=", "Only this")]'})
-        other = self.Article.create({"name": "Other", "body": "<p>x</p>"})
+        other = self.Article.create({"name": "Other", "content": "<p>x</p>"})
         self.assertEqual(self._queued(other), 0)
 
         self.cfg.write({"index_domain": False})
@@ -169,17 +184,25 @@ class IndexScopeTests(SweepCase):
         self.assertEqual(self._queued(other), 1)
 
     def test_a_write_to_a_domain_field_reevaluates_scope(self):
-        # The documented example domain. Moving an article into the
-        # excluded category must take its vector with it, even though
-        # neither the body nor the exclusion flag changed.
-        self.cfg.write({"index_domain": '[("category", "!=", "private")]'})
+        # The documented example domain. Moving a page into the excluded
+        # category must take its vector with it, even though neither the
+        # content nor the exclusion flag changed.
+        #
+        # v15 note: `document.page` has no `category` selection — a page's
+        # category IS its `parent_id`, a m2o to a page of type "category".
+        # So the scope-deciding field is `parent_id`, and the fixtures are
+        # two real category pages.
+        private, shared = self._categories()
+        self.cfg.write({
+            "index_domain": '[("parent_id", "!=", %d)]' % private.id,
+        })
         article = self.Article.create({
-            "name": "Moves out", "body": "<p>x</p>", "category": "workspace",
+            "name": "Moves out", "content": "<p>x</p>", "parent_id": shared.id,
         })
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
-        article.write({"category": "private"})
+        article.write({"parent_id": private.id})
         self.assertEqual(
             self._queued(article), 1,
             "a write to a domain field must enqueue for re-evaluation",
@@ -193,8 +216,11 @@ class IndexScopeTests(SweepCase):
         # The precision half of the previous test: the watched set is
         # derived from the domain, so a field no domain mentions must
         # not churn the queue.
-        self.cfg.write({"index_domain": '[("category", "!=", "private")]'})
-        article = self.Article.create({"name": "Stable", "body": "<p>x</p>"})
+        private, _shared = self._categories()
+        self.cfg.write({
+            "index_domain": '[("parent_id", "!=", %d)]' % private.id,
+        })
+        article = self.Article.create({"name": "Stable", "content": "<p>x</p>"})
         self._sweep()
         self.Queue.search([]).unlink()
 
@@ -204,16 +230,16 @@ class IndexScopeTests(SweepCase):
     def test_domain_fields_extraction_ignores_operators(self):
         self.cfg.write({
             "index_domain":
-                '["|", ("category", "!=", "private"), '
-                '("parent_id.category", "=", "workspace")]',
+                '["|", ("active", "=", True), '
+                '("parent_id.name", "=", "Shared")]',
         })
         self.assertEqual(
-            self.cfg._index_domain_fields(), {"category", "parent_id"},
+            self.cfg._index_domain_fields(), {"active", "parent_id"},
         )
 
     def test_disabled_model_row_indexes_nothing(self):
         self.cfg.write({"enabled": False})
-        article = self.Article.create({"name": "A", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>x</p>"})
         self.assertEqual(self._queued(article), 0)
 
     # ------------------------------------------ domain validation
@@ -232,7 +258,7 @@ class IndexScopeTests(SweepCase):
 
     def test_empty_domain_means_every_record(self):
         self.cfg.write({"index_domain": False})
-        article = self.Article.create({"name": "A", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>x</p>"})
         self.assertEqual(self._queued(article), 1)
 
     # ------------------------------------------------ reindex all
@@ -240,10 +266,10 @@ class IndexScopeTests(SweepCase):
     def test_reindex_all_respects_scope(self):
         # The button that can send a whole corpus in one sweep. It
         # must not be the way a filtered corpus gets sent in full.
-        keep = self.Article.create({"name": "Keep", "body": "<p>x</p>"})
-        drop = self.Article.create({"name": "Drop", "body": "<p>x</p>"})
+        keep = self.Article.create({"name": "Keep", "content": "<p>x</p>"})
+        drop = self.Article.create({"name": "Drop", "content": "<p>x</p>"})
         flagged = self.Article.create({
-            "name": "Flagged", "body": "<p>x</p>",
+            "name": "Flagged", "content": "<p>x</p>",
             "orc_ai_index_exclude": True,
         })
         self.cfg.write({"index_domain": '[("name", "!=", "Drop")]'})
@@ -257,11 +283,11 @@ class IndexScopeTests(SweepCase):
     # --------------------------------------------------- preview
 
     def test_preview_counts_without_calling_the_provider(self):
-        indexed = self.Article.create({"name": "Indexed", "body": "<p>x</p>"})
+        indexed = self.Article.create({"name": "Indexed", "content": "<p>x</p>"})
         self._sweep()
-        pending = self.Article.create({"name": "Pending", "body": "<p>x</p>"})
+        pending = self.Article.create({"name": "Pending", "content": "<p>x</p>"})
         excluded = self.Article.create({
-            "name": "Excluded", "body": "<p>x</p>",
+            "name": "Excluded", "content": "<p>x</p>",
             "orc_ai_index_exclude": True,
         })
 
@@ -285,7 +311,7 @@ class IndexScopeTests(SweepCase):
         # flag, NOT via a domain edit: saving a domain purges on the
         # spot, so a domain edit would leave nothing to report and the
         # assertion would be vacuous rather than wrong.
-        article = self.Article.create({"name": "Purgeable", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Purgeable", "content": "<p>x</p>"})
         self._sweep()
         article.write({"orc_ai_index_exclude": True})
 
@@ -302,8 +328,8 @@ class IndexScopeTests(SweepCase):
     def test_sync_purges_and_enqueues_then_is_idempotent(self):
         # Same reason as the preview test: the out-of-scope state comes
         # from the flag, because a domain edit already purges on save.
-        stays = self.Article.create({"name": "Stays", "body": "<p>x</p>"})
-        goes = self.Article.create({"name": "Goes", "body": "<p>x</p>"})
+        stays = self.Article.create({"name": "Stays", "content": "<p>x</p>"})
+        goes = self.Article.create({"name": "Goes", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(stays))
         self.assertTrue(self._embedding_of(goes))
@@ -329,7 +355,7 @@ class IndexScopeTests(SweepCase):
         # deferred work. Leaving it there means widening the domain
         # later sends that record with no explicit action — the exact
         # thing the narrow/widen asymmetry exists to prevent.
-        article = self.Article.create({"name": "Pending", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Pending", "content": "<p>x</p>"})
         self.assertEqual(self._queued(article), 1)
         self.assertFalse(self._embedding_of(article))
 
@@ -345,7 +371,7 @@ class IndexScopeTests(SweepCase):
         self.assertFalse(self._embedding_of(article))
 
     def test_sync_enqueues_in_scope_records_with_no_vector(self):
-        article = self.Article.create({"name": "Fresh", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Fresh", "content": "<p>x</p>"})
         self.Queue.search([]).unlink()
         self.assertEqual(self._queued(article), 0)
 
@@ -357,7 +383,7 @@ class IndexScopeTests(SweepCase):
     def test_sync_does_not_call_the_provider(self):
         # Cost lands on the cron, not on the button — so an operator
         # exploring the settings page cannot spend money by accident.
-        self.Article.create({"name": "A", "body": "<p>x</p>"})
+        self.Article.create({"name": "A", "content": "<p>x</p>"})
         provider = self._stub_provider()
         with patch(
             "odoo.addons.orc_client_semantic_search.models.orc_embedding."
@@ -372,7 +398,7 @@ class IndexScopeTests(SweepCase):
         # `search` drops archived records the domain never mentioned,
         # and archiving an article would delete its vector as a side
         # effect — which README says it must not.
-        article = self.Article.create({"name": "Archived", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Archived", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -381,7 +407,7 @@ class IndexScopeTests(SweepCase):
         # what's under test is the predicate, not the trigger.
         self.cfg.write({"index_domain": '[("name", "!=", "Something else")]'})
         article.write({"active": False})
-        self.Queue.create({"model": "knowledge.article", "res_id": article.id})
+        self.Queue.create({"model": "document.page", "res_id": article.id})
         self._sweep()
 
         self.assertTrue(
@@ -390,7 +416,7 @@ class IndexScopeTests(SweepCase):
         )
 
     def test_active_in_the_domain_does_purge_on_archive(self):
-        article = self.Article.create({"name": "Opt in", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Opt in", "content": "<p>x</p>"})
         self._sweep()
         self.cfg.write({"index_domain": '[("active", "=", True)]'})
 
@@ -422,12 +448,12 @@ class IndexScopeTests(SweepCase):
         # flush — any later ORM call — puts it back over the top. The
         # domain would then be perfectly valid by the time the sweep
         # reads it, and the tests below would be asserting nothing.
-        self.env.flush_all()
+        self.env["base"].flush()
         self.env.cr.execute(
             "UPDATE orc_embedding_config SET index_domain = %s WHERE id = %s",
             ['[("gone_in_an_upgrade", "=", 1)]', self.cfg.id],
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.assertEqual(
             self.cfg.index_domain, '[("gone_in_an_upgrade", "=", 1)]',
             "the broken domain must actually be what the code reads back — "
@@ -439,7 +465,7 @@ class IndexScopeTests(SweepCase):
         # "We can't tell what's in scope" must not mean "delete the
         # corpus". A transient-looking config break that wiped every
         # vector would cost a full re-embed to recover.
-        article = self.Article.create({"name": "Keep me", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Keep me", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -454,7 +480,7 @@ class IndexScopeTests(SweepCase):
 
     def test_a_broken_domain_does_not_send(self):
         self._break_the_domain()
-        self.Article.create({"name": "New", "body": "<p>x</p>"})
+        self.Article.create({"name": "New", "content": "<p>x</p>"})
         provider = self._sweep()
         provider.embed.assert_not_called()
 
@@ -463,10 +489,10 @@ class IndexScopeTests(SweepCase):
         # would roll back their save, so a bad index setting would
         # make articles unsaveable.
         self._break_the_domain()
-        article = self.Article.create({"name": "Still saveable", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Still saveable", "content": "<p>x</p>"})
         self.assertTrue(article.exists())
-        article.write({"body": "<p>edited</p>"})
-        self.assertIn("edited", article.body)
+        article.write({"content": "<p>edited</p>"})
+        self.assertIn("edited", article.content)
 
     def test_a_broken_domain_refuses_sync_and_preview(self):
         self._break_the_domain()
@@ -482,7 +508,7 @@ class IndexScopeTests(SweepCase):
         # in scope. With scope unknown the predicate returns nothing,
         # so the delete would stand alone and the corpus would be gone
         # — at the cost of a full re-embed to recover.
-        article = self.Article.create({"name": "Precious", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Precious", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -501,7 +527,7 @@ class IndexScopeTests(SweepCase):
         # did, re-enabling the row later would put the stale vectors
         # straight back into semantic_search, which gates on `enabled`
         # rather than on scope.
-        article = self.Article.create({"name": "A", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -520,11 +546,11 @@ class IndexScopeTests(SweepCase):
         # next sweep re-sends its text, so the preview must count it —
         # otherwise the figure understates transmission in exactly the
         # case an operator consults it for.
-        article = self.Article.create({"name": "Edited", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Edited", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
-        article.write({"body": "<p>substantially different</p>"})
+        article.write({"content": "<p>substantially different</p>"})
         report = self.cfg._index_scope_report()
 
         self.assertIn(article.id, report["would_send_ids"])
@@ -537,7 +563,7 @@ class IndexScopeTests(SweepCase):
         # orphaned means nothing ever revisits them, and re-creating
         # the row makes them searchable again on save — even under a
         # narrower domain, since semantic_search gates on `enabled`.
-        article = self.Article.create({"name": "A", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 
@@ -552,7 +578,7 @@ class IndexScopeTests(SweepCase):
     def test_deleting_the_global_row_purges_nothing(self):
         # The global row holds provider credentials, not a scope. It
         # must not be a corpus-delete button.
-        article = self.Article.create({"name": "A", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self._embedding_of(article))
 

@@ -9,16 +9,20 @@ from .common import patch_orc_client, share_test_cursor
 # save. Kept faithful to views/res_users_views.xml: every field there is in
 # the read-back spec, including ones hidden behind a *dynamic* `invisible`
 # modifier (the client evaluates those itself, so they stay in the spec).
-USER_FORM_SPEC = {
-    "orc_enabled": {},
-    "orc_user_id": {},
-    "orc_provisioned_at": {},
-    "orc_last_rotation_at": {},
-    "orc_last_sync_at": {},
-    "orc_last_sync_status": {},
-    "orc_last_sync_message": {},
-    "orc_api_key_ref": {},
-}
+# The AI Workplace page's fields. v15's form client loads a record with
+# `read(fields)` and saves with `write(vals)` followed by a read-back of the
+# same fields, so this is a flat list rather than the nested spec `web_read` /
+# `web_save` take on 17.0+.
+USER_FORM_FIELDS = [
+    "orc_enabled",
+    "orc_user_id",
+    "orc_provisioned_at",
+    "orc_last_rotation_at",
+    "orc_last_sync_at",
+    "orc_last_sync_status",
+    "orc_last_sync_message",
+    "orc_api_key_ref",
+]
 
 
 class TestOrcProvisioning(TransactionCase):
@@ -62,7 +66,7 @@ class TestOrcProvisioning(TransactionCase):
     def test_provision_creates_key_and_records_audit(self):
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_user_id, "orc-uid-1")
         self.assertTrue(self.user.orc_api_key_ref)
         key = self.env["res.users.apikeys"].sudo().browse(self.user.orc_api_key_ref)
@@ -79,7 +83,7 @@ class TestOrcProvisioning(TransactionCase):
         immediately, without waiting for the hourly cron."""
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.orc_last_sync_status, "ok")
         self.assertTrue(self.user.orc_last_sync_at)
         # Exact string, not `assertIn("provisioned", ...)`: the loose form is
@@ -110,7 +114,7 @@ class TestOrcProvisioning(TransactionCase):
                 self.user.orc_enabled = True
 
         # Rollback: no ORC uid, no key row persists.
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_user_id)
         self.assertFalse(self.user.orc_api_key_ref)
 
@@ -138,7 +142,7 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client(revoke_infra_access=capture_revoke):
             self.user.orc_enabled = False
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_enabled)
         # Breadcrumb retained.
         self.assertEqual(self.user.orc_user_id, orc_uid)
@@ -169,7 +173,7 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client(provision_user=capture_provision):
             self.user.orc_enabled = True
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_api_key_ref)  # fresh key pushed
         # provision_user was actually called despite the breadcrumb
         # being present (write-hook keys off `orc_api_key_ref`, not
@@ -191,7 +195,7 @@ class TestOrcProvisioning(TransactionCase):
         """
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         key_id = self.user.orc_api_key_ref
         self.assertTrue(key_id)
 
@@ -199,11 +203,11 @@ class TestOrcProvisioning(TransactionCase):
         self.env.cr.execute(
             "DELETE FROM res_users_apikeys WHERE id = %s", (key_id,)
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
 
         # The form reads end-to-end while the pointer is still dangling —
         # no cron, no migration, nothing to heal first.
-        self.user.web_read(USER_FORM_SPEC)
+        self.user.read(USER_FORM_FIELDS)
         self.assertEqual(self.user.orc_api_key_ref, key_id)
         # ...and the pointer reads as "we own no key", so reconcile treats it
         # as drift and re-provisions rather than stamping "in sync".
@@ -211,7 +215,7 @@ class TestOrcProvisioning(TransactionCase):
 
         # Nightly cleanup still tidies the column up.
         self.env["res.users"]._cron_orc_orphan_cleanup()
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_api_key_ref)
 
     # -- rotation key-pointer / reconcile-validity regression -------------------
@@ -231,7 +235,7 @@ class TestOrcProvisioning(TransactionCase):
         """
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         email = self.user._orc_gateway_identity()
 
         # Simulate the drift: gateway still lists the user, local pointer gone.
@@ -249,7 +253,7 @@ class TestOrcProvisioning(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_reconcile()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(len(provision_calls), 1,
                          "lost pointer must trigger re-provision, not 'in sync'")
         self.assertTrue(self.user.orc_api_key_ref, "ownership pointer restored")
@@ -260,7 +264,7 @@ class TestOrcProvisioning(TransactionCase):
         existing local key + a remote key row is genuinely 'in sync'."""
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         email = self.user._orc_gateway_identity()
 
         provision_calls: list[dict] = []
@@ -275,7 +279,7 @@ class TestOrcProvisioning(TransactionCase):
         ):
             self.env["res.users"]._cron_orc_reconcile()
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(provision_calls, [],
                          "valid pointer → in sync, must not re-provision")
         self.assertEqual(self.user.orc_last_sync_message, "in sync")
@@ -286,7 +290,7 @@ class TestOrcProvisioning(TransactionCase):
         keys. Only keys older than the grace window are genuine orphans."""
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         key_id = self.user.orc_api_key_ref
         self.assertTrue(key_id)
 
@@ -307,7 +311,7 @@ class TestOrcProvisioning(TransactionCase):
             "WHERE id = %s",
             (key_id,),
         )
-        self.env.invalidate_all()
+        self.env.cache.invalidate()
         self.env["res.users"]._cron_orc_orphan_cleanup()
         self.assertFalse(
             self.env["res.users.apikeys"].browse(key_id).exists(),
@@ -319,7 +323,7 @@ class TestOrcProvisioning(TransactionCase):
     def test_form_save_provisions_when_the_new_key_row_is_unreadable(self):
         """Ticking the checkbox on the user FORM must provision and commit.
 
-        `web_save` is `write()` **plus a read-back in the same transaction**
+        A v15 form save is `write()` **plus a read-back in the same transaction**
         (odoo/addons/web/models/models.py). Provisioning stores the id of a key
         row created in a nested cursor that commits on its own, so the
         enclosing transaction — REPEATABLE READ, snapshot opened before that
@@ -347,9 +351,12 @@ class TestOrcProvisioning(TransactionCase):
             "_orc_generate_api_key",
             unresolvable_key,
         ):
-            self.user.web_save({"orc_enabled": True}, USER_FORM_SPEC)
+            # write() + the read-back, which is what the v15 form save does
+            # and the half that used to roll the whole save back.
+            self.user.write({"orc_enabled": True})
+            self.user.read(USER_FORM_FIELDS)
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(
             self.user.orc_enabled,
             "the form save must commit, not roll back on the read-back",
@@ -376,7 +383,7 @@ class TestOrcProvisioning(TransactionCase):
         })
         with self._patch_client():
             admin.orc_enabled = True
-        admin.invalidate_recordset()
+        admin.invalidate_cache(ids=admin.ids)
         self.assertEqual(admin.orc_gateway_email, "admin_test_orc@myco.odoo.com")
         self.assertEqual(admin._orc_gateway_identity(), "admin_test_orc@myco.odoo.com")
 
@@ -415,7 +422,7 @@ class TestOrcProvisioning(TransactionCase):
         identity).  Admin must consciously re-enable."""
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_enabled)
         prior_uid = self.user.orc_user_id
         self.assertTrue(prior_uid)
@@ -428,7 +435,7 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client():
             self.user.sudo().write({"login": "renamed@acme.test"})
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertFalse(self.user.orc_enabled)
         # Breadcrumb retained — re-enabling re-provisions cleanly
         # against the new login.
@@ -446,7 +453,7 @@ class TestOrcProvisioning(TransactionCase):
         """
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_user_id)
 
         def gateway_down(**kw):
@@ -455,7 +462,7 @@ class TestOrcProvisioning(TransactionCase):
         with self._patch_client(revoke_infra_access=gateway_down):
             self.user.sudo().write({"login": "renamed@acme.test"})
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         # The rename landed and access is off locally, despite the outage.
         self.assertEqual(self.user.login, "renamed@acme.test")
         self.assertFalse(self.user.orc_enabled)
@@ -475,7 +482,7 @@ class TestOrcProvisioning(TransactionCase):
         """
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
 
         def gateway_down(**kw):
             raise UserError("AI Workplace unreachable")
@@ -489,13 +496,13 @@ class TestOrcProvisioning(TransactionCase):
         Writing the same login back is a no-op for orc_enabled."""
         with self._patch_client():
             self.user.orc_enabled = True
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
 
         # Same value — guard must NOT trip.
         with self._patch_client():
             self.user.sudo().write({"login": self.user.login})
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertTrue(self.user.orc_enabled)
 
     def test_write_combined_login_change_plus_orc_enabled_true_is_rewritten(self):
@@ -515,7 +522,7 @@ class TestOrcProvisioning(TransactionCase):
                 "orc_enabled": True,
             })
 
-        self.user.invalidate_recordset()
+        self.user.invalidate_cache(ids=self.user.ids)
         self.assertEqual(self.user.login, "renamed@acme.test")
         self.assertFalse(self.user.orc_enabled)
         self.assertEqual(provision_calls, [])  # never invoked

@@ -1,6 +1,6 @@
 """Daily token cap enforcement.
 
-Until 18.0.0.3.0 ``daily_token_cap`` was declared on the config
+Until 15.0.0.3.0 ``daily_token_cap`` was declared on the config
 model, rendered in the Settings form, described in README as
 "cron pauses on overrun" and recommended by AGENTS.md as the way
 to pause indexing — and read by no code at all. These tests pin
@@ -34,7 +34,7 @@ class DailyTokenCapTests(SweepCase):
             "tokens_used_today": 0,
             "tokens_usage_date": fields.Date.context_today(self.global_cfg),
         })
-        self.Article = self.env["knowledge.article"]
+        self.Article = self.env["document.page"]
         self.Embedding = self.env["orc.embedding"]
         self.Queue = self.env["orc.embedding.queue"]
 
@@ -94,7 +94,7 @@ class DailyTokenCapTests(SweepCase):
     # --------------------------------------------------- accounting
 
     def test_a_successful_embed_adds_to_todays_total(self):
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
         self._sweep()
         self.assertGreater(
             self._used(), 0,
@@ -106,13 +106,13 @@ class DailyTokenCapTests(SweepCase):
         )
 
     def test_a_hash_skip_costs_nothing(self):
-        article = self.Article.create({"name": "A", "body": "<p>hello</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>hello</p>"})
         self._sweep()
         spent_after_first = self._used()
 
-        # Re-enqueue without changing the body: hash-skip path, no
+        # Re-enqueue without changing the content: hash-skip path, no
         # provider call, so no tokens.
-        self.Queue.create({"model": "knowledge.article", "res_id": article.id})
+        self.Queue.create({"model": "document.page", "res_id": article.id})
         provider = self._sweep()
         provider.embed.assert_not_called()
         self.assertEqual(self._used(), spent_after_first)
@@ -122,7 +122,7 @@ class DailyTokenCapTests(SweepCase):
             "tokens_used_today": 999_999_999,
             "tokens_usage_date": "2020-01-01",
         })
-        self.Article.create({"name": "A", "body": "<p>hello</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello</p>"})
         provider = self._sweep()
 
         provider.embed.assert_called()
@@ -141,13 +141,13 @@ class DailyTokenCapTests(SweepCase):
         # AGENTS.md documents this as the pause switch. It must not
         # read as "no limit".
         self.global_cfg.write({"daily_token_cap": 0})
-        article = self.Article.create({"name": "A", "body": "<p>hello</p>"})
+        article = self.Article.create({"name": "A", "content": "<p>hello</p>"})
 
         provider = self._sweep()
         provider.embed.assert_not_called()
         self.assertEqual(
             self.Queue.search_count([
-                ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+                ("model", "=", "document.page"), ("res_id", "=", article.id),
             ]),
             1,
             "a paused sweep must leave the work queued, not discard it",
@@ -159,7 +159,7 @@ class DailyTokenCapTests(SweepCase):
             "tokens_used_today": 10,
             "tokens_usage_date": fields.Date.context_today(self.global_cfg),
         })
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
 
         provider = self._sweep()
         provider.embed.assert_not_called()
@@ -170,7 +170,7 @@ class DailyTokenCapTests(SweepCase):
         for i in range(5):
             self.Article.create({
                 "name": "Article %s" % i,
-                "body": "<p>" + ("word " * 200) + "</p>",
+                "content": "<p>" + ("word " * 200) + "</p>",
             })
         self.global_cfg.write({
             "daily_token_cap": 1,
@@ -184,7 +184,7 @@ class DailyTokenCapTests(SweepCase):
             "the cap must bind within a pass, not only between passes",
         )
         self.assertGreater(
-            self.Queue.search_count([("model", "=", "knowledge.article")]), 0,
+            self.Queue.search_count([("model", "=", "document.page")]), 0,
             "unspent work stays queued for tomorrow",
         )
 
@@ -196,7 +196,7 @@ class DailyTokenCapTests(SweepCase):
         # the charge there means a wrong `vector_dim` bills on every
         # cron pass forever — there is no attempt ceiling — while
         # tokens_used_today sits at zero and the cap never engages.
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
 
         provider = self._usage_provider(
             4242,
@@ -212,7 +212,7 @@ class DailyTokenCapTests(SweepCase):
         )
 
     def test_a_mis_shaped_vector_is_charged(self):
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
 
         # Wrong-length vector: HTTP fine, our own shape check rejects.
         provider = self._usage_provider(11, returns=[[1.0, 0.0]])
@@ -222,7 +222,7 @@ class DailyTokenCapTests(SweepCase):
     def test_an_unbilled_failure_is_not_charged(self):
         # The other direction: a network error costs nothing, so it
         # must not eat the day's budget. The provider reports None.
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
 
         provider = MagicMock()
         provider.dim = 4
@@ -239,7 +239,7 @@ class DailyTokenCapTests(SweepCase):
         # The property the fix exists for: a misconfiguration cannot
         # bill without limit. Three passes at 40 tokens against a cap
         # of 100 must stop the fourth.
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
         self.global_cfg.write({"daily_token_cap": 100})
 
         calls = []
@@ -264,7 +264,7 @@ class DailyTokenCapTests(SweepCase):
         # hundred charges as one, which is a cap that does not cap.
         for i in range(4):
             self.Article.create({
-                "name": "Article %s" % i, "body": "<p>hello world %s</p>" % i,
+                "name": "Article %s" % i, "content": "<p>hello world %s</p>" % i,
             })
 
         provider = self._usage_provider(100)
@@ -281,7 +281,7 @@ class DailyTokenCapTests(SweepCase):
         # of 250 at 100 tokens a call allows two calls, then stops.
         for i in range(5):
             self.Article.create({
-                "name": "Article %s" % i, "body": "<p>hello world %s</p>" % i,
+                "name": "Article %s" % i, "content": "<p>hello world %s</p>" % i,
             })
         self.global_cfg.write({"daily_token_cap": 250})
 
@@ -321,7 +321,7 @@ class DailyTokenCapTests(SweepCase):
         # a real rollback follows from the cursor being independent,
         # which is asserted separately below. Cross-transaction
         # durability rests on the code shape, reviewed not executed.
-        self.Article.create({"name": "A", "body": "<p>hello world</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello world</p>"})
 
         charged_at_failure = []
 
@@ -376,16 +376,16 @@ class DailyTokenCapTests(SweepCase):
         # sweep, taking every other queued row with it.
         cfg = self.env["orc.embedding.config"].search([
             ("is_global", "=", False),
-            ("model_name", "=", "knowledge.article"),
+            ("model_name", "=", "document.page"),
         ], limit=1)
-        self.Article.create({"name": "A", "body": "<p>hello</p>"})
+        self.Article.create({"name": "A", "content": "<p>hello</p>"})
         cfg.write({"text_field_path": "gone_in_an_upgrade"})
 
         provider = self._stub_provider()
         self._sweep(provider)  # must not raise
 
         provider.embed.assert_not_called()
-        row = self.Queue.search([("model", "=", "knowledge.article")], limit=1)
+        row = self.Queue.search([("model", "=", "document.page")], limit=1)
         self.assertTrue(row, "the row stays queued for after the fix")
         self.assertEqual(row.attempts, 1)
         self.assertIn("gone_in_an_upgrade", row.last_error or "")
@@ -394,10 +394,10 @@ class DailyTokenCapTests(SweepCase):
         # Bookkeeping that costs nothing must not be held hostage to
         # the budget: an excluded record's vector should go even when
         # the cap is spent, or exclusion silently waits for a refill.
-        article = self.Article.create({"name": "Purge me", "body": "<p>x</p>"})
+        article = self.Article.create({"name": "Purge me", "content": "<p>x</p>"})
         self._sweep()
         self.assertTrue(self.Embedding.search([
-            ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+            ("model", "=", "document.page"), ("res_id", "=", article.id),
         ]))
 
         article.write({"orc_ai_index_exclude": True})
@@ -407,7 +407,7 @@ class DailyTokenCapTests(SweepCase):
         provider.embed.assert_not_called()
         self.assertFalse(
             self.Embedding.search([
-                ("model", "=", "knowledge.article"), ("res_id", "=", article.id),
+                ("model", "=", "document.page"), ("res_id", "=", article.id),
             ]),
             "purging is free; a spent budget must not keep an excluded "
             "record's vector alive",

@@ -4,7 +4,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: Odoo Server 18.0\n"
+"Project-Id-Version: Odoo Server 15.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-05-11 11:50+0000\n"
 "PO-Revision-Date: 2026-05-11 11:50+0000\n"
@@ -35,7 +35,7 @@ msgstr "Wyszukiwanie semantyczne AI"
 
 #. module: orc_client_semantic_search
 #: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_orc_embedding_config_form
-#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_orc_embedding_config_list
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_orc_embedding_config_tree
 msgid "AI Semantic Search Config"
 msgstr "Konfiguracja wyszukiwania semantycznego AI"
 
@@ -133,8 +133,8 @@ msgstr "Nazwa wyświetlana"
 
 #. module: orc_client_semantic_search
 #: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__text_field_path
-msgid "Dotted path to the text source on the record. e.g. 'body'."
-msgstr "Ścieżka (z kropkami) do źródła tekstu w rekordzie, np. 'body'."
+msgid "Dotted path to the text source on the record. e.g. 'content'."
+msgstr "Ścieżka (z kropkami) do źródła tekstu w rekordzie, np. 'content'."
 
 #. module: orc_client_semantic_search
 #: model:ir.model.constraint,message:orc_client_semantic_search.constraint_orc_embedding_config_unique_per_model_name
@@ -207,9 +207,9 @@ msgid "Indexed model"
 msgstr "Indeksowany model"
 
 #. module: orc_client_semantic_search
-#: model:ir.model,name:orc_client_semantic_search.model_knowledge_article
-msgid "Knowledge Article"
-msgstr "Artykuł bazy wiedzy"
+#: model:ir.model,name:orc_client_semantic_search.model_document_page
+msgid "Document Page"
+msgstr "Strona dokumentu"
 
 #. module: orc_client_semantic_search
 #: model:ir.model.fields,field_description:orc_client_semantic_search.field_orc_embedding__write_uid
@@ -446,8 +446,8 @@ msgstr "Voyage"
 
 #. module: orc_client_semantic_search
 #: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__model_name
-msgid "e.g. knowledge.article"
-msgstr "np. knowledge.article"
+msgid "e.g. document.page"
+msgstr "np. document.page"
 
 #. module: orc_client_semantic_search
 #: model:ir.model.fields,help:orc_client_semantic_search.field_orc_embedding_config__provider_model
@@ -455,23 +455,23 @@ msgid "e.g. text-embedding-3-small"
 msgstr "np. text-embedding-3-small"
 
 #. module: orc_client_semantic_search
-#: model:ir.model.fields,field_description:orc_client_semantic_search.field_knowledge_article__orc_ai_index_exclude
+#: model:ir.model.fields,field_description:orc_client_semantic_search.field_document_page__orc_ai_index_exclude
 msgid "Exclude from AI index"
 msgstr "Wyłącz z indeksu AI"
 
 #. module: orc_client_semantic_search
-#: model:ir.model.fields,help:orc_client_semantic_search.field_knowledge_article__orc_ai_index_exclude
+#: model:ir.model.fields,help:orc_client_semantic_search.field_document_page__orc_ai_index_exclude
 msgid ""
-"Keep this article out of the semantic-search index. Its text is then never "
+"Keep this page out of the semantic-search index. Its text is then never "
 "sent to the embedding provider, and any vector it already has is deleted on "
-"the next indexing pass. The assistant can still read the article the normal "
+"the next indexing pass. The assistant can still read the page the normal "
 "way if you have access to it — it just can't find it by meaning."
 msgstr ""
-"Nie umieszczaj tego artykułu w indeksie wyszukiwania semantycznego. Jego "
+"Nie umieszczaj tej strony w indeksie wyszukiwania semantycznego. Jej "
 "treść nie zostanie wtedy nigdy wysłana do dostawcy embeddingów, a "
 "istniejący wektor zostanie usunięty przy następnym przebiegu indeksowania. "
-"Asystent nadal może przeczytać ten artykuł w zwykły sposób, jeśli masz do "
-"niego dostęp — po prostu nie znajdzie go po znaczeniu."
+"Asystent nadal może przeczytać tę stronę w zwykły sposób, jeśli masz do "
+"niej dostęp — po prostu nie znajdzie jej po znaczeniu."
 
 #. module: orc_client_semantic_search
 #: model:ir.model.fields,field_description:orc_client_semantic_search.field_orc_embedding_config__index_domain
@@ -540,8 +540,8 @@ msgid "Index scope"
 msgstr "Zakres indeksu"
 
 #. module: orc_client_semantic_search
-#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_knowledge_article_list_ai_exclude
-#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_knowledge_article_search_ai_exclude
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_document_page_tree_ai_exclude
+#: model_terms:ir.ui.view,arch_db:orc_client_semantic_search.view_document_page_search_ai_exclude
 msgid "Excluded from AI index"
 msgstr "Wyłączone z indeksu AI"
 

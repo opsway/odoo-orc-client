@@ -277,15 +277,29 @@ class TestOrcClientTasksExt(TransactionCase):
     # toggles the dark class before paint
     # (see opsway/odoo-agent-gateway#85).
 
-    def test_embed_return_to_appends_dark_when_param_unset(self):
-        # Default behaviour — no admin override → dark, since the
-        # ORC dashboard is dark by default and the addon is meant
-        # to match that out of the box.
+    def test_embed_return_to_uses_the_seeded_theme(self):
+        # Out of the box the addon seeds `orc_client_tasks.embed_theme` to
+        # `light` (data/ir_config_parameter.xml) and EMBED_THEME_DEFAULT is
+        # `light` too, so an untouched install embeds light.
+        #
+        # This assertion used to read `dark`, and had done since before the
+        # default was flipped — it passed only where the seed data had not
+        # been loaded. Asserting the value the addon actually ships is the
+        # point of the test.
         room_id = "!abc:host"
         url = self.env["orc.client"]._build_embed_return_to(room_id)
         self.assertEqual(
-            url, "/tasks/%21abc%3Ahost?embed=1&theme=dark",
+            url, "/tasks/%21abc%3Ahost?embed=1&theme=light",
         )
+
+    def test_embed_return_to_falls_back_when_the_param_is_absent(self):
+        # The seed row is what is normally read; delete it and the in-source
+        # default has to carry the call on its own.
+        self.env["ir.config_parameter"].sudo().set_param(
+            "orc_client_tasks.embed_theme", False,
+        )
+        url = self.env["orc.client"]._build_embed_return_to("!abc:host")
+        self.assertTrue(url.endswith("&theme=light"), url)
 
     def test_embed_return_to_appends_light_when_admin_sets_light(self):
         self.env["ir.config_parameter"].sudo().set_param(
@@ -294,16 +308,16 @@ class TestOrcClientTasksExt(TransactionCase):
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
         self.assertTrue(url.endswith("&theme=light"), url)
 
-    def test_embed_return_to_falls_back_to_dark_on_garbage_value(self):
+    def test_embed_return_to_coerces_a_garbage_value_to_the_default(self):
         # Defensive: an admin who fat-fingers `orange` shouldn't
         # send a garbage param to ORC (which would silently leave
         # the SSR cookie default in place — bad UX). Coerce to
-        # the documented default.
+        # the documented default, which is `light`.
         self.env["ir.config_parameter"].sudo().set_param(
             "orc_client_tasks.embed_theme", "orange",
         )
         url = self.env["orc.client"]._build_embed_return_to("!abc:host")
-        self.assertTrue(url.endswith("&theme=dark"), url)
+        self.assertTrue(url.endswith("&theme=light"), url)
 
     def test_embed_return_to_percent_encodes_room_id(self):
         # `:` and `!` must be percent-encoded so the path component
